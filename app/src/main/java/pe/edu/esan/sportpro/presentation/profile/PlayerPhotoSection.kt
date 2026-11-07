@@ -42,7 +42,7 @@ fun PlayerPhotoSection(uid: String) {
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) scope.launch {
             busy = true
-            status = "Subiendo fotoâ€¦"
+            status = "Subiendo..."
             try {
                 val path = SportProPhotoStorage.upload(context, uid, uri)
                 FirebaseFirestore.getInstance().collection("users").document(uid)
@@ -67,10 +67,10 @@ fun PlayerPhotoSection(uid: String) {
                 contentScale = ContentScale.Crop
             )
         } else {
-            Text("AÃºn no tienes foto de perfil")
+            Text("Aún no tienes foto de perfil")
         }
         Button(onClick = { pickPhoto.launch("image/*") }, enabled = !busy) {
-            Text(if (busy) "Subiendoâ€¦" else "Cambiar foto")
+            Text(if (busy) "Subiendo..." else "Cambiar foto")
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall)

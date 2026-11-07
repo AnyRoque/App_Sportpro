@@ -1,4 +1,4 @@
-﻿package pe.edu.esan.sportpro.presentation.profile
+package pe.edu.esan.sportpro.presentation.profile
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +27,7 @@ fun ProfileScreen(user: UserModel, onLogout: () -> Unit) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Field("Rol", user.roleEnum?.label ?: user.role)
                 Field("Correo", user.email)
-                Field("TelÃƒÆ’Ã‚Â©fono", user.phone)
+                Field("Teléfono", user.phone)
                 if (user.birthDate.isNotBlank()) Field("Fecha de nacimiento", user.birthDate)
             }
         }
@@ -36,7 +36,7 @@ fun ProfileScreen(user: UserModel, onLogout: () -> Unit) {
     PlayerSportsSection(user.uid)
     PlayerEditSection(user.uid)
 }
-        OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Cerrar sesiÃƒÆ’Ã‚Â³n") }
+        OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Cerrar sesión") }
     }
 }
 
