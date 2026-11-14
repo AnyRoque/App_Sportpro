@@ -10,6 +10,18 @@ service cloud.firestore {
     function role() { return exists(myDoc()) ? get(myDoc()).data.role : ''; }
     function isAdmin() { return signedIn() && role() == 'ADM'; }
     function isDt() { return signedIn() && role() == 'DT'; }
+    function me() { return request.auth.uid; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // Partido: DT dueño, operador asignado, DT miembro del partido o ADM (US-16 a US-21)
+    function matchData(matchId) { return get(/databases/$(database)/documents/matches/$(matchId)).data; }
+    function isMatchStaffOf(m) {
+      return m.get('dtUid', '') == me()
+        || m.get('operatorUid', '') == me()
+        || (me() in m.get('memberUids', []) && isDt())
+        || isAdmin();
+    }
+    function isMatchStaff(matchId) { return signedIn() && isMatchStaffOf(matchData(matchId)); }
 
     // ---------- Usuarios (US-01, US-06) ----------
     match /users/{uid} {
@@ -47,14 +59,34 @@ service cloud.firestore {
 
     // ---------- Partidos y eventos en vivo (US-16 a US-21) ----------
     match /matches/{matchId} {
-      allow read, write: if signedIn();
-      match /callups/{callUpId} { allow read, write: if signedIn(); }
-      match /lineup/{lineupId} { allow read, write: if signedIn(); }
+      allow read: if signedIn();
+      // Solo el DT programa sus partidos; marcador, cronómetro y estado los cambia el equipo técnico
+      allow create: if isDt() && request.resource.data.dtUid == me();
+      allow update: if signedIn() && isMatchStaffOf(resource.data);
+      allow delete: if false;
+
+      // Convocatoria (US-17): el DT la arma; el jugador o su padre solo responde la suya
+      match /callups/{callUpId} {
+        allow read: if signedIn();
+        allow create, delete: if isMatchStaff(matchId);
+        allow update: if isMatchStaff(matchId)
+                      || (signedIn()
+                          && (resource.data.get('userUid', '') == me() || resource.data.get('parentUid', '') == me())
+                          && changed().hasOnly(['responseStatus', 'rejectReason', 'rejectComment', 'updatedAt']));
+      }
+      // Alineación (US-18)
+      match /lineup/{lineupId} {
+        allow read: if signedIn();
+        allow write: if isMatchStaff(matchId);
+      }
+      // Eventos en vivo (US-19 / US-20)
       match /events/{eventId} {
-        allow read, create, update: if signedIn();
+        allow read: if signedIn();
+        allow create, update: if isMatchStaff(matchId);
         allow delete: if false;   // los eventos se anulan, no se borran (US-20)
         match /history/{historyId} {
-          allow read, create: if signedIn();
+          allow read: if signedIn();
+          allow create: if isMatchStaff(matchId);
           allow update, delete: if false;   // bitácora inmutable
         }
       }
@@ -103,17 +135,67 @@ service cloud.firestore {
     // ---------- Resumen IA del partido (US-25 a US-27) ----------
     match /summaries/{matchId} {
       allow read: if signedIn();
-      allow create, update: if isDt();
+      // Solo el DT de ESE partido genera, edita y aprueba su resumen
+      allow create, update: if isDt() && matchData(matchId).dtUid == me();
       allow delete: if false;
     }
 
-    // ---------- Jugadores, entrenamientos y notificaciones ----------
-    // Requieren sesión. Pendiente: restringir por rol en la siguiente iteración.
-    match /{col}/{docId=**} {
-      allow read, write: if signedIn() && col in [
-        'players', 'dniIndex', 'trainings', 'attendance', 'attendanceHistory',
-        'notifications', 'eventCancellationRequests'
-      ];
+    // ---------- Jugadores (US-02, US-04, US-05) ----------
+    match /players/{playerId} {
+      allow read: if signedIn();
+      // DT registra a sus jugadores; JUG/PAD solo crean su propia solicitud o la de su hijo
+      allow create: if isAdmin()
+                    || (isDt() && request.resource.data.dtUid == me())
+                    || (signedIn() && request.resource.data.get('userUid', '') == me())
+                    || (signedIn() && request.resource.data.get('parentUid', '') == me());
+      // JUG/PAD editan solo su ficha y sin tocar vínculo, equipo ni estado
+      allow update: if isAdmin() || isDt()
+                    || (signedIn()
+                        && (resource.data.get('userUid', '') == me() || resource.data.get('parentUid', '') == me())
+                        && !changed().hasAny(['linkStatus', 'dtUid', 'teamId', 'teamName', 'active', 'userUid', 'parentUid', 'dni']));
+      allow delete: if isAdmin();
+
+      // Historial de asistencia por jugador (US-13 / US-14)
+      match /attendanceHistory/{recordId} {
+        allow read: if signedIn();
+        allow write: if isDt() || isAdmin();
+      }
+    }
+
+    // DNI único (US-04): se consulta uno a uno, nunca se lista
+    match /dniIndex/{dni} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- Entrenamientos y asistencia (US-11 a US-14) ----------
+    match /trainings/{trainingId} {
+      allow read: if signedIn();
+      allow write: if isDt() || isAdmin();
+    }
+    match /attendance/{recordId} {
+      allow read: if signedIn();
+      allow write: if isDt() || isAdmin();
+    }
+    match /attendanceHistory/{recordId} {
+      allow read: if signedIn();
+      allow write: if isDt() || isAdmin();
+    }
+
+    // ---------- Notificaciones: cualquiera las envía, solo el destinatario las lee ----------
+    match /notifications/{notifId} {
+      allow create: if signedIn();
+      allow read, update, delete: if signedIn() && resource.data.recipientUid == me();
+    }
+
+    // ---------- Solicitudes de anulación de eventos (US-20) ----------
+    match /eventCancellationRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.get('requestingDtUid', '') == me();
+      allow read: if isAdmin() || (signedIn() && resource.data.get('requestingDtUid', '') == me());
+      allow update: if isAdmin();
+      allow delete: if false;
     }
   }
 }

@@ -18,7 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import pe.edu.esan.sportpro.data.model.UserModel
 
-/** Perfil de la cuenta y cierre de sesiÃƒÆ’Ã‚Â³n (US-01). */
+/** Perfil de la cuenta y cierre de sesión (US-01). */
 @Composable
 fun ProfileScreen(user: UserModel, onLogout: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
