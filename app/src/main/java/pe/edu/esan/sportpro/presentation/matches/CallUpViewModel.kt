@@ -159,7 +159,7 @@ class CallUpViewModel : ViewModel() {
         if (mDate != null) {
             val matchDateTime = LocalDateTime.of(mDate, mTime)
             if (!deadlineDateTime.isBefore(matchDateTime)) {
-                deadlineError.value = "La fecha y hora límite deben ser anteriores al partido ($m.date $m.time hs)"
+                deadlineError.value = "La fecha y hora límite deben ser anteriores al partido (${m.date} ${m.time} hs)"
                 return false
             }
         }

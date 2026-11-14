@@ -115,6 +115,13 @@ class MatchConsoleViewModel : ViewModel() {
                     }
                 }
 
+                // Partido en tiempo real: estado, cronómetro y marcador
+                viewModelScope.launch {
+                    MatchRepository.observeMatch(matchId).collect { (updated, _) ->
+                        _match.value = updated
+                    }
+                }
+
                 // Cargar eventos en tiempo real
                 viewModelScope.launch {
                     MatchRepository.observeMatchEvents(matchId).collect { (eventList, _) ->
