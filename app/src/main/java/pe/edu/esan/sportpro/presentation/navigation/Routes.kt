@@ -77,6 +77,13 @@ object Routes {
     const val LIVE_MATCH = "live_match/{matchId}"
     fun liveMatch(matchId: String) = "live_match/$matchId"
 
+    // DT / JUG / PAD – Avisos de Pruebas y Convocatorias (US-10)
+    const val TRYOUTS = "tryouts"
+    const val TRYOUT_FORM = "tryout_form?tryoutId={tryoutId}"
+    fun tryoutForm(tryoutId: String? = null) = if (tryoutId == null) "tryout_form" else "tryout_form?tryoutId=$tryoutId"
+    const val TRYOUT_CANDIDATES = "tryout_candidates/{tryoutId}"
+    fun tryoutCandidates(tryoutId: String) = "tryout_candidates/$tryoutId"
+
     // Comunicación e IA (US-22 a US-27)
     const val ANNOUNCEMENTS = "announcements"
     const val ANNOUNCEMENT_FORM = "announcement_form?editId={editId}"

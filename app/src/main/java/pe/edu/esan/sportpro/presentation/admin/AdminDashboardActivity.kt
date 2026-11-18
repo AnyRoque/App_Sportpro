@@ -26,8 +26,10 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
+import pe.edu.esan.sportpro.presentation.admin.monthly_fees.MonthlyFeeScreen
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -130,7 +132,10 @@ fun AdminDashboardContent(
         ) { paddingValues -> Box(modifier = Modifier.padding(paddingValues)) { content() } }
     }
 
-    if (currentView == "MODERATION") {
+    if (currentView == "MONTHLY_FEES") {
+        // US-08: Gestión simulada de mensualidades
+        SubScreen("Gestión de Mensualidades", "DASHBOARD") { MonthlyFeeScreen(adminEmail = adminEmail) }
+    } else if (currentView == "MODERATION") {
         // US-24: Moderación de publicaciones reportadas
         SubScreen("Moderación de comunidad", "DASHBOARD") { ModerationScreen(adminUid = adminUid) }
     } else if (currentView == "ANNOUNCEMENTS") {
@@ -314,6 +319,20 @@ fun AdminDashboardContent(
                     Icon(Icons.Default.CheckCircle, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Validar Equipos Pendientes")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Módulo de Gestión Simulada de Mensualidades (US-08)
+                OutlinedButton(
+                    onClick = {
+                        currentView = "MONTHLY_FEES"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Gestión de Mensualidades (Simulado)")
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
