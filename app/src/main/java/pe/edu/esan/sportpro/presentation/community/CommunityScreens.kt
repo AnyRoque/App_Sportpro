@@ -1,6 +1,14 @@
 package pe.edu.esan.sportpro.presentation.community
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -169,7 +177,15 @@ fun PostCard(
                 Text("Oculta temporalmente por reportes, en revisión del administrador.",
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-            Text(post.text, style = MaterialTheme.typography.bodyLarge)
+            if (post.text.isNotBlank()) Text(post.text, style = MaterialTheme.typography.bodyLarge)
+            if (post.imageUrl.isNotBlank()) {
+                AsyncImage(
+                    model = post.imageUrl,
+                    contentDescription = "Foto de la publicación",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).clip(MaterialTheme.shapes.medium)
+                )
+            }
             HorizontalDivider()
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ReactionType.ALL.forEach { r ->
@@ -221,8 +237,12 @@ fun ReportDialog(onConfirm: (String, String) -> Unit, onDismiss: () -> Unit) {
 @Composable
 fun CreatePostScreen(user: UserModel, onDone: () -> Unit, viewModel: CreatePostViewModel = viewModel()) {
     val s by viewModel.state.collectAsState()
+    val context = LocalContext.current
     LaunchedEffect(user.uid) { viewModel.start(user) }
     LaunchedEffect(s.saved) { if (s.saved) onDone() }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) viewModel.onChange { it.copy(imageUri = uri, error = null) }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -233,6 +253,20 @@ fun CreatePostScreen(user: UserModel, onDone: () -> Unit, viewModel: CreatePostV
             label = { Text("¿Qué quieres compartir? (${s.text.length}/1000)") },
             minLines = 4, modifier = Modifier.fillMaxWidth()
         )
+        // Foto opcional (se sube a Supabase al publicar)
+        if (s.imageUri != null) {
+            AsyncImage(
+                model = s.imageUri,
+                contentDescription = "Foto seleccionada",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).clip(MaterialTheme.shapes.medium)
+            )
+            TextButton(onClick = { viewModel.onChange { it.copy(imageUri = null) } }) { Text("Quitar foto") }
+        } else {
+            OutlinedButton(onClick = { pickImage.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                Text("📷 Agregar foto")
+            }
+        }
         Text("Visibilidad", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = s.visibility == PostVisibility.TEAM,
@@ -248,7 +282,7 @@ fun CreatePostScreen(user: UserModel, onDone: () -> Unit, viewModel: CreatePostV
         Text("No compartas teléfonos, direcciones ni datos personales de menores.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
         s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Button(onClick = { viewModel.publish(user) }, enabled = !s.saving, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { viewModel.publish(user, context.applicationContext) }, enabled = !s.saving, modifier = Modifier.fillMaxWidth()) {
             if (s.saving) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("Publicar")
         }
     }

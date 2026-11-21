@@ -152,7 +152,7 @@ service cloud.firestore {
       allow update: if isAdmin() || isDt()
                     || (signedIn()
                         && (resource.data.get('userUid', '') == me() || resource.data.get('parentUid', '') == me())
-                        && !changed().hasAny(['linkStatus', 'dtUid', 'teamId', 'teamName', 'active', 'userUid', 'parentUid', 'dni']));
+                        && !changed().hasAny(['linkStatus', 'dtUid', 'teamId', 'teamName', 'active', 'userUid', 'parentUid', 'dni', 'monthlyFees']));
       allow delete: if isAdmin();
 
       // Historial de asistencia por jugador (US-13 / US-14)
@@ -182,6 +182,37 @@ service cloud.firestore {
     match /attendanceHistory/{recordId} {
       allow read: if signedIn();
       allow write: if isDt() || isAdmin();
+    }
+
+    // ---------- Catálogo configurable de eventos (US-09): lo edita solo el ADM ----------
+    match /event_catalog/{eventTypeId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- Pruebas y convocatorias abiertas (US-10) ----------
+    match /tryouts/{tryoutId} {
+      allow read: if signedIn();
+      allow create: if isDt() && request.resource.data.dtUid == me();
+      allow update: if isAdmin()
+                    || (isDt() && resource.data.dtUid == me())
+                    // JUG/PAD solo suman su interés al contador
+                    || (signedIn() && changed().hasOnly(['interestedCount']));
+      allow delete: if isAdmin() || (isDt() && resource.data.dtUid == me());
+
+      match /candidates/{candidateId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.userUid == me();
+        allow update: if false;
+        allow delete: if isAdmin()
+                      || (isDt() && get(/databases/$(database)/documents/tryouts/$(tryoutId)).data.dtUid == me());
+      }
+    }
+    match /tryoutReports/{reportId} {
+      allow create: if signedIn() && request.resource.data.reporterUid == me();
+      allow read: if isAdmin() || (signedIn() && (resource == null || resource.data.reporterUid == me()));
+      allow update: if isAdmin();
+      allow delete: if false;
     }
 
     // ---------- Notificaciones: cualquiera las envía, solo el destinatario las lee ----------

@@ -1,6 +1,8 @@
 package pe.edu.esan.sportpro.presentation.tryouts
 
 import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.composable
 import pe.edu.esan.sportpro.data.model.Role
 import pe.edu.esan.sportpro.presentation.navigation.Routes
@@ -15,13 +17,19 @@ fun NavGraphBuilder.tryoutsGraph(sec: SecuredContext) {
             TryoutListScreen(user = u, onNavigate = { route -> nav.navigate(route) })
         }
     }
-    composable(Routes.TRYOUT_FORM) { backStackEntry ->
+    composable(
+        Routes.TRYOUT_FORM,
+        arguments = listOf(navArgument("tryoutId") { type = NavType.StringType; nullable = true; defaultValue = null })
+    ) { backStackEntry ->
         val tryoutId = backStackEntry.arguments?.getString("tryoutId")
         sec.Secured("Formulario de Convocatoria", allowed = setOf(Role.DT)) { u ->
             TryoutFormScreen(user = u, editTryoutId = tryoutId, onBack = { nav.popBackStack() })
         }
     }
-    composable(Routes.TRYOUT_CANDIDATES) { backStackEntry ->
+    composable(
+        Routes.TRYOUT_CANDIDATES,
+        arguments = listOf(navArgument("tryoutId") { type = NavType.StringType })
+    ) { backStackEntry ->
         val tryoutId = backStackEntry.arguments?.getString("tryoutId").orEmpty()
         sec.Secured("Candidatos Interesados", allowed = setOf(Role.DT)) { u ->
             TryoutCandidatesScreen(user = u, tryoutId = tryoutId, onBack = { nav.popBackStack() })
