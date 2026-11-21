@@ -1,5 +1,7 @@
 package pe.edu.esan.sportpro.presentation.community
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -16,6 +18,7 @@ import pe.edu.esan.sportpro.data.model.PostVisibility
 import pe.edu.esan.sportpro.data.model.Role
 import pe.edu.esan.sportpro.data.model.TeamModel
 import pe.edu.esan.sportpro.data.model.UserModel
+import pe.edu.esan.sportpro.data.remote.CommunityImageStorage
 import pe.edu.esan.sportpro.data.remote.CommunityRepository
 import pe.edu.esan.sportpro.data.remote.UserTeamsRepository
 import pe.edu.esan.sportpro.util.Validators
@@ -96,6 +99,8 @@ data class CreatePostState(
     val teams: List<TeamModel> = emptyList(),
     val teamId: String = "",
     val isMinor: Boolean = false,
+    /** Foto elegida de la galería (opcional) */
+    val imageUri: Uri? = null,
     val error: String? = null,
     val saving: Boolean = false,
     val saved: Boolean = false
@@ -120,10 +125,10 @@ class CreatePostViewModel : ViewModel() {
 
     fun onChange(t: (CreatePostState) -> CreatePostState) = _state.update(t)
 
-    fun publish(u: UserModel) {
+    fun publish(u: UserModel, context: Context) {
         val s = _state.value
         val error = when {
-            s.text.isBlank() -> "Escribe algo para publicar"
+            s.text.isBlank() && s.imageUri == null -> "Escribe algo o agrega una foto para publicar"
             s.text.length > 1000 -> "Máximo 1000 caracteres"
             s.teamId.isBlank() && s.visibility == PostVisibility.TEAM -> "No perteneces a ningún equipo aprobado"
             s.isMinor && s.visibility == PostVisibility.COMMUNITY -> "Los jugadores menores solo pueden publicar en “Mi equipo”"
@@ -133,9 +138,18 @@ class CreatePostViewModel : ViewModel() {
         if (error != null) { _state.update { it.copy(error = error) }; return }
         viewModelScope.launch {
             _state.update { it.copy(saving = true, error = null) }
+            // 1) Si hay foto, primero se sube a Supabase y se guarda solo su URL en Firestore
+            val imageUrl = s.imageUri?.let { uri ->
+                try {
+                    CommunityImageStorage.upload(context, uri)
+                } catch (e: Exception) {
+                    _state.update { it.copy(saving = false, error = e.message ?: "No se pudo subir la foto") }
+                    return@launch
+                }
+            }.orEmpty()
             val team = s.teams.firstOrNull { it.id == s.teamId }
             val post = PostModel(
-                text = s.text.trim(), visibility = s.visibility,
+                text = s.text.trim(), imageUrl = imageUrl, visibility = s.visibility,
                 teamId = team?.id ?: "", teamName = team?.name ?: "",
                 authorUid = u.uid, authorName = u.fullName, authorRole = u.role
             )
