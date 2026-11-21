@@ -175,7 +175,18 @@ object SummaryRepository {
 
             val payload = buildPayload(match, events)
             val request = GeminiRequest(contents = listOf(GeminiContent(parts = listOf(GeminiPart("$PROMPT\n\nJSON:\n$payload")))))
-            val response = GeminiClient.api.generateContent(GeminiClient.model, request)
+            // Reintenta si el proveedor está saturado (429/503), con espera creciente
+            var response: pe.edu.esan.sportpro.data.remote.ai.GeminiResponse? = null
+            for (intento in 1..3) {
+                try {
+                    response = GeminiClient.api.generateContent(GeminiClient.model, request)
+                    break
+                } catch (e: retrofit2.HttpException) {
+                    if ((e.code() == 503 || e.code() == 429) && intento < 3) kotlinx.coroutines.delay(2000L * intento)
+                    else throw e
+                }
+            }
+            if (response == null) throw Exception("La IA no respondió. Intenta nuevamente")
             val text = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
                 ?: throw Exception("La IA no devolvió respuesta. Intenta nuevamente")
 
@@ -203,7 +214,13 @@ object SummaryRepository {
             summaries.document(match.id).set(summary).await()
             Result.success(summary)
         } catch (e: retrofit2.HttpException) {
-            Result.failure(Exception("Error del proveedor de IA (${e.code()}). Revisa la clave o intenta nuevamente"))
+            val msg = when (e.code()) {
+                401, 403 -> "Clave de IA inválida. Revisa GEMINI_API_KEY"
+                404 -> "Modelo de IA no disponible. Revisa GEMINI_MODEL"
+                429, 503 -> "El servicio de IA está saturado. Intenta en unos segundos"
+                else -> "Error del proveedor de IA (${e.code()}). Intenta nuevamente"
+            }
+            Result.failure(Exception(msg))
         } catch (e: java.io.IOException) {
             Result.failure(Exception("Sin conexión con el proveedor de IA. Reintentar"))
         } catch (e: Exception) {
