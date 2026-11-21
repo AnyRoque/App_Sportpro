@@ -444,7 +444,7 @@ fun CreateEditEventDialog(
                                 requiresSecondPlayer = requiresSecondPlayer,
                                 affectsScore = affectsScore,
                                 accumulatesStat = accumulatesStat,
-                                active = initialItem?.active ?: true
+                                active = initialItem?.active ?: false
                             )
                             onConfirm(eventToSave)
                         }
