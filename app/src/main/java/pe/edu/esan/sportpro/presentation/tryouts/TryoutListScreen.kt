@@ -426,13 +426,23 @@ fun TryoutCard(
                             Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
                         }
                     } else {
-                        Button(
-                            onClick = onRegisterInterest,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Me interesa")
+                        val isFull = tryout.slots > 0 && tryout.interestedCount >= tryout.slots
+                        if (isFull) {
+                            OutlinedButton(
+                                onClick = { },
+                                enabled = false
+                            ) {
+                                Text("Cupos agotados")
+                            }
+                        } else {
+                            Button(
+                                onClick = onRegisterInterest,
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Me interesa")
+                            }
                         }
                     }
                 }

@@ -146,6 +146,7 @@ object TryoutRepository {
 
     /**
      * Registra el interés de un JUG o PAD ("Me interesa").
+     * Valida cupos disponibles y evita inscripciones duplicadas para la misma convocatoria.
      */
     suspend fun registerInterest(candidate: TryoutCandidateModel): Result<Unit> {
         return try {
@@ -154,7 +155,32 @@ object TryoutRepository {
             if (candidate.age <= 0) return Result.failure(Exception("Debe ingresar una edad válida."))
             if (candidate.position.isBlank()) return Result.failure(Exception("Debe indicar la posición a postular."))
 
+            val tryoutDoc = tryoutsCollection.document(candidate.tryoutId).get().await()
+            if (!tryoutDoc.exists()) return Result.failure(Exception("La convocatoria ya no está disponible."))
+
+            val slots = tryoutDoc.getLong("slots")?.toInt() ?: 0
+            val interestedCount = tryoutDoc.getLong("interestedCount")?.toInt() ?: 0
+
+            // Validar si los cupos están agotados
+            if (slots > 0 && interestedCount >= slots) {
+                return Result.failure(Exception("Los cupos para esta convocatoria ya se encuentran agotados."))
+            }
+
             val candidatesRef = tryoutsCollection.document(candidate.tryoutId).collection(CANDIDATES)
+
+            // Validar que la persona no se haya inscrito previamente en la misma convocatoria
+            if (candidate.userUid.isNotBlank()) {
+                val existingByUser = candidatesRef.whereEqualTo("userUid", candidate.userUid).get().await()
+                if (!existingByUser.isEmpty) {
+                    return Result.failure(Exception("Ya te has inscrito previamente en esta convocatoria."))
+                }
+            }
+
+            val existingByName = candidatesRef.whereEqualTo("name", candidate.name.trim()).get().await()
+            if (!existingByName.isEmpty) {
+                return Result.failure(Exception("Ya existe una inscripción registrada a nombre de ${candidate.name.trim()}."))
+            }
+
             val docRef = candidatesRef.document()
             val candidateToSave = candidate.copy(id = docRef.id)
             docRef.set(candidateToSave).await()

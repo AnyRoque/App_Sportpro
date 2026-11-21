@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
+import pe.edu.esan.sportpro.presentation.admin.event_catalog.EventCatalogScreen
 import pe.edu.esan.sportpro.presentation.admin.monthly_fees.MonthlyFeeScreen
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -132,7 +133,10 @@ fun AdminDashboardContent(
         ) { paddingValues -> Box(modifier = Modifier.padding(paddingValues)) { content() } }
     }
 
-    if (currentView == "MONTHLY_FEES") {
+    if (currentView == "EVENT_CATALOG") {
+        // US-09: Catálogo configurable de eventos del partido
+        SubScreen("Catálogo de Eventos del Partido", "DASHBOARD") { EventCatalogScreen() }
+    } else if (currentView == "MONTHLY_FEES") {
         // US-08: Gestión simulada de mensualidades
         SubScreen("Gestión de Mensualidades", "DASHBOARD") { MonthlyFeeScreen(adminEmail = adminEmail) }
     } else if (currentView == "MODERATION") {
@@ -333,6 +337,20 @@ fun AdminDashboardContent(
                     Icon(Icons.Default.DateRange, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Gestión de Mensualidades (Simulado)")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Módulo de Catálogo Configurable de Eventos (US-09)
+                OutlinedButton(
+                    onClick = {
+                        currentView = "EVENT_CATALOG"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Build, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Catálogo de Eventos del Partido (US-09)")
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
