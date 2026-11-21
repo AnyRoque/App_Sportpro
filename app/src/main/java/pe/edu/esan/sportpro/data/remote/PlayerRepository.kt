@@ -57,7 +57,8 @@ object PlayerRepository {
     /** Actualiza un perfil existente (el DNI no se modifica). */
     suspend fun updatePlayer(player: PlayerModel): Result<Unit> {
         return try {
-            players.document(player.id).set(player).await()
+            // merge: conserva campos que no están en el modelo (ej. monthlyFees de US-08)
+            players.document(player.id).set(player, com.google.firebase.firestore.SetOptions.merge()).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
