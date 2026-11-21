@@ -22,7 +22,7 @@ object TryoutRepository {
     private const val TRYOUTS = "tryouts"
     private const val CANDIDATES = "candidates"
     private const val TEAMS = "teams"
-    private const val REPORTS = "reports"
+    private const val TRYOUT_REPORTS = "tryoutReports"
 
     private val firestore = FirebaseFirestore.getInstance()
     private val tryoutsCollection get() = firestore.collection(TRYOUTS)
@@ -221,6 +221,7 @@ object TryoutRepository {
     ): Result<Unit> {
         return try {
             val reportData = hashMapOf(
+                "tryoutId" to tryoutId,
                 "postId" to tryoutId,
                 "postText" to "[Aviso de Convocatoria] $tryoutTitle",
                 "postAuthorUid" to authorUid,
@@ -228,10 +229,11 @@ object TryoutRepository {
                 "reason" to reason,
                 "detail" to detail,
                 "reporterUid" to reporterUid,
+                "type" to "TRYOUT",
                 "status" to "PENDIENTE",
                 "createdAt" to FieldValue.serverTimestamp()
             )
-            firestore.collection(REPORTS).document("${tryoutId}_$reporterUid").set(reportData).await()
+            firestore.collection(TRYOUT_REPORTS).document("${tryoutId}_$reporterUid").set(reportData).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
