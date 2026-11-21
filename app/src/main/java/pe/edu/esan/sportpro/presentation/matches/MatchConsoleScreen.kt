@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.R
+import pe.edu.esan.sportpro.data.model.EventCatalogModel
 import pe.edu.esan.sportpro.data.model.EventStatus
 import pe.edu.esan.sportpro.data.model.EventTeam
 import pe.edu.esan.sportpro.data.model.EventType
@@ -66,6 +67,7 @@ import pe.edu.esan.sportpro.data.model.MatchEventModel
 import pe.edu.esan.sportpro.data.model.MatchModel
 import pe.edu.esan.sportpro.data.model.MatchStatus
 import pe.edu.esan.sportpro.data.model.UserModel
+import pe.edu.esan.sportpro.data.remote.EventCatalogRepository
 import pe.edu.esan.sportpro.presentation.components.DropdownField
 import pe.edu.esan.sportpro.presentation.components.EmptyState
 import pe.edu.esan.sportpro.presentation.components.LoadingBox
@@ -535,49 +537,79 @@ private fun MatchTimerHeader(
 private fun QuickEventButtons(
     onEventSelected: (type: String) -> Unit
 ) {
-    val quickEvents = listOf(
-        EventType.GOAL to "⚽ Gol Marcado",
-        EventType.YELLOW_CARD to "🟨 Tarjeta Amarilla",
-        EventType.RED_CARD to "🟥 Tarjeta Roja",
-        EventType.SUBSTITUTION to "🔄 Cambio de Jugador",
-        EventType.FOUL to "⚠️ Falta Cometida",
-        EventType.SHOT_ON_TARGET to "🎯 Tiro al Arco",
-        EventType.SHOT_OFF_TARGET to "↗️ Tiro Desviado",
-        EventType.CORNER to "🚩 Tiro de Esquina",
-        EventType.OFFSIDE to "🚩 Fuera de Juego"
-    )
+    var activeCatalogEvents by remember { mutableStateOf<List<EventCatalogModel>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        EventCatalogRepository.observeEventCatalog().collect { list ->
+            activeCatalogEvents = list.filter { it.active }
+        }
+    }
+
+    val quickEvents = if (activeCatalogEvents.isNotEmpty()) {
+        activeCatalogEvents.map { item ->
+            val typeKey = when (item.name.trim().lowercase()) {
+                "gol" -> EventType.GOAL
+                "tarjeta amarilla" -> EventType.YELLOW_CARD
+                "tarjeta roja" -> EventType.RED_CARD
+                "cambio" -> EventType.SUBSTITUTION
+                "falta" -> EventType.FOUL
+                "tiro al arco" -> EventType.SHOT_ON_TARGET
+                "tiro desviado" -> EventType.SHOT_OFF_TARGET
+                "tiro de esquina" -> EventType.CORNER
+                "fuera de juego" -> EventType.OFFSIDE
+                else -> item.name
+            }
+            val iconEmoji = when (item.icon) {
+                "play_arrow" -> "▶️"
+                "pause" -> "⏸️"
+                "flag" -> "🏁"
+                "sports_soccer" -> "⚽"
+                "style" -> if (item.colorHex == "#FFEB3B") "🟨" else "🟥"
+                "cached" -> "🔄"
+                "warning" -> "⚠️"
+                "gps_fixed" -> "🎯"
+                "navigation" -> "🚩"
+                "block" -> "🚫"
+                "swap_horiz" -> "↔️"
+                else -> "📌"
+            }
+            typeKey to "$iconEmoji ${item.name}"
+        }
+    } else {
+        listOf(
+            EventType.GOAL to "⚽ Gol Marcado",
+            EventType.YELLOW_CARD to "🟨 Tarjeta Amarilla",
+            EventType.RED_CARD to "🟥 Tarjeta Roja",
+            EventType.SUBSTITUTION to "🔄 Cambio de Jugador",
+            EventType.FOUL to "⚠️ Falta Cometida",
+            EventType.SHOT_ON_TARGET to "🎯 Tiro al Arco",
+            EventType.SHOT_OFF_TARGET to "↗️ Tiro Desviado",
+            EventType.CORNER to "🚩 Tiro de Esquina",
+            EventType.OFFSIDE to "🚩 Fuera de Juego"
+        )
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            quickEvents.take(3).forEach { (type, label) ->
-                Button(
-                    onClick = { onEventSelected(type) },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = ButtonDefaults.ContentPadding
-                ) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                }
-            }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            quickEvents.drop(3).take(3).forEach { (type, label) ->
-                OutlinedButton(
-                    onClick = { onEventSelected(type) },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = ButtonDefaults.ContentPadding
-                ) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                }
-            }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            quickEvents.drop(6).take(3).forEach { (type, label) ->
-                OutlinedButton(
-                    onClick = { onEventSelected(type) },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = ButtonDefaults.ContentPadding
-                ) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        quickEvents.chunked(3).forEachIndexed { index, rowEvents ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                rowEvents.forEach { (type, label) ->
+                    if (index == 0) {
+                        Button(
+                            onClick = { onEventSelected(type) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = ButtonDefaults.ContentPadding
+                        ) {
+                            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onEventSelected(type) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = ButtonDefaults.ContentPadding
+                        ) {
+                            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
+                    }
                 }
             }
         }

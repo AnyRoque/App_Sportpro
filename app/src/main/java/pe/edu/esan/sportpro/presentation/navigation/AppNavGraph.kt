@@ -25,6 +25,7 @@ import pe.edu.esan.sportpro.presentation.profile.ProfileScreen
 import pe.edu.esan.sportpro.presentation.teams.teamApprovalGraph
 import pe.edu.esan.sportpro.presentation.teams.teamsGraph
 import pe.edu.esan.sportpro.presentation.training.trainingGraph
+import pe.edu.esan.sportpro.presentation.tryouts.tryoutsGraph
 
 /**
  * Grafo principal. Cada módulo registra sus rutas en su propio archivo *Nav.kt
@@ -87,5 +88,6 @@ fun AppNavGraph() {
         trainingGraph(sec)                         // US-11
         matchesGraph(sec)                          // US-16
         communityGraph(sec)                        // US-22 a US-27
+        tryoutsGraph(sec)                          // US-10
     }
 }

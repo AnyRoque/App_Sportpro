@@ -48,6 +48,7 @@ fun HomeScreen(user: UserModel, onNavigate: (String) -> Unit) {
         Icons.Default.Place
     )
     val announcementsShortcut = Shortcut("Anuncios", "Avisos del equipo y de la academia", Routes.ANNOUNCEMENTS, Icons.Default.Notifications)
+    val tryoutsShortcut = Shortcut("Pruebas y Convocatorias", "Avisos de pruebas de selección y convocatorias abiertas", Routes.TRYOUTS, Icons.Default.DateRange)
     val communityShortcut = Shortcut("Comunidad", "Publicaciones de tu equipo y la academia", Routes.COMMUNITY, Icons.Default.Favorite)
     val summariesShortcut = Shortcut("Resúmenes de partidos", "Crónicas generadas con IA y revisadas por el DT", Routes.SUMMARIES, Icons.Default.Star)
     val userAttendanceShortcut = Shortcut("Mi Asistencia", "Porcentaje de asistencia y desglose de sesiones", Routes.USER_ATTENDANCE_HISTORY, Icons.Default.CheckCircle)
@@ -58,12 +59,14 @@ fun HomeScreen(user: UserModel, onNavigate: (String) -> Unit) {
             Shortcut("Mis equipos", "Registra equipos y gestiona tu plantel", Routes.MY_TEAMS, Icons.AutoMirrored.Filled.List),
             matchesShortcut,
             trainingsShortcut,
+            tryoutsShortcut,
             announcementsShortcut,
             communityShortcut,
             summariesShortcut
         )
         Role.PAD -> listOf(
             Shortcut("Mis hijos", "Registra a tus hijos y vincúlalos a su equipo", Routes.MY_CHILDREN, Icons.Default.Face),
+            tryoutsShortcut,
             matchesShortcut,
             trainingsShortcut,
             userAttendanceShortcut,
@@ -72,6 +75,7 @@ fun HomeScreen(user: UserModel, onNavigate: (String) -> Unit) {
             summariesShortcut
         )
         Role.JUG -> listOf(
+            tryoutsShortcut,
             matchesShortcut,
             trainingsShortcut,
             userAttendanceShortcut,
