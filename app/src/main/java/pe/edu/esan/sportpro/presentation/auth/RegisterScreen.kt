@@ -46,6 +46,7 @@ fun RegisterScreen(
     val err = ui.fieldErrors
 
     LaunchedEffect(Unit) { viewModel.clearMessages() }
+    pe.edu.esan.sportpro.presentation.components.StatusBarIcons(white = false)
 
     Column(
         modifier = Modifier

@@ -29,6 +29,7 @@ fun ForgotPasswordScreen(viewModel: AuthViewModel, onBack: () -> Unit) {
     var email by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) { viewModel.clearMessages() }
+    pe.edu.esan.sportpro.presentation.components.StatusBarIcons(white = false)
 
     Column(
         modifier = Modifier.fillMaxSize().statusBarsPadding().padding(24.dp),
