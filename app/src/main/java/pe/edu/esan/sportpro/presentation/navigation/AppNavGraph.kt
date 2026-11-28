@@ -69,7 +69,7 @@ fun AppNavGraph() {
 
         // Comunes
         composable(Routes.HOME) {
-            sec.Secured("SportPro") { u -> HomeScreen(u) { route -> navController.navigate(route) } }
+            sec.Secured("SportPro", showTopBar = false) { u -> HomeScreen(u) { route -> navController.navigate(route) } }
         }
         composable(Routes.PROFILE) {
             sec.Secured("Mi perfil") { u -> ProfileScreen(u, onLogout = { authViewModel.logout() }) }

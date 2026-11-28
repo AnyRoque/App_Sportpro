@@ -47,21 +47,10 @@ private data class DrawerItem(val label: String, val route: String, val icon: Im
 
 /** Cada rol ve únicamente las opciones para las que tiene autorización (US-01). */
 private fun drawerItemsFor(role: Role?): List<DrawerItem> {
+    // La navegacion se hace desde los botones de Inicio; el menu solo lleva Inicio y Mi perfil
     val home = DrawerItem("Inicio", Routes.HOME, Icons.Default.Home)
     val profile = DrawerItem("Mi perfil", Routes.PROFILE, Icons.Default.Person)
-    val trainings = DrawerItem("Entrenamientos", Routes.TRAININGS, Icons.Default.DateRange)
-    val matches = DrawerItem("Partidos", Routes.MATCHES, Icons.Default.Place)
-    val myAttendance = DrawerItem("Mi asistencia", Routes.USER_ATTENDANCE_HISTORY, Icons.Default.CheckCircle)
-    val announcements = DrawerItem("Anuncios", Routes.ANNOUNCEMENTS, Icons.Default.Notifications)
-    val community = DrawerItem("Comunidad", Routes.COMMUNITY, Icons.Default.Favorite)
-    val summaries = DrawerItem("Resúmenes", Routes.SUMMARIES, Icons.Default.Star)
-    return when (role) {
-        Role.ADM -> listOf(home, DrawerItem("Validar equipos", Routes.TEAM_APPROVAL, Icons.Default.CheckCircle), profile)
-        Role.DT -> listOf(home, DrawerItem("Mis equipos", Routes.MY_TEAMS, Icons.AutoMirrored.Filled.List), trainings, matches, announcements, community, summaries, profile)
-        Role.PAD -> listOf(home, DrawerItem("Mis hijos", Routes.MY_CHILDREN, Icons.Default.Face), trainings, matches, myAttendance, announcements, community, summaries, profile)
-        Role.JUG -> listOf(home, trainings, matches, myAttendance, announcements, community, summaries, profile)
-        null -> listOf(home)
-    }
+    return if (role == null) listOf(home) else listOf(home, profile)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,7 +60,7 @@ fun DrawerScaffold(
     user: UserModel,
     title: String,
     onLogout: () -> Unit,
-    showBack: Boolean = false,
+    showBack: Boolean = false, showTopBar: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -122,7 +111,7 @@ fun DrawerScaffold(
         }
     ) {
         Scaffold(
-            topBar = {
+            topBar = { if (showTopBar)
                 TopAppBar(
                     title = { Text(title) },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -144,8 +133,8 @@ fun DrawerScaffold(
                 )
             }
         ) { paddingValues ->
-            Box(modifier = Modifier.padding(paddingValues)) {
-                content()
+            Box(modifier = if (showTopBar) Modifier.padding(paddingValues) else Modifier) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalOpenDrawer provides { scope.launch { drawerState.open() } }) { content() }
             }
         }
     }
