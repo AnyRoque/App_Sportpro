@@ -21,7 +21,7 @@ class SecuredContext(val navController: NavHostController, val authViewModel: Au
 fun SecuredContext.Secured(
     title: String,
     allowed: Set<Role> = Role.entries.toSet(),
-    showBack: Boolean = false,
+    showBack: Boolean = false, showTopBar: Boolean = true,
     content: @Composable (UserModel) -> Unit
 ) {
     val session by authViewModel.session.collectAsState()
@@ -30,7 +30,7 @@ fun SecuredContext.Secured(
         LoadingBox()
         return
     }
-    DrawerScaffold(navController, user, title, onLogout = { authViewModel.logout() }, showBack = showBack) {
+    DrawerScaffold(navController, user, title, onLogout = { authViewModel.logout() }, showBack = showBack, showTopBar = showTopBar) {
         if (user.roleEnum in allowed) content(user) else AccessDenied()
     }
 }
