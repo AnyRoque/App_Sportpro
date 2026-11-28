@@ -41,8 +41,11 @@ fun AppNavGraph() {
     val sec = SecuredContext(navController, authViewModel)
 
     // Redirección según la sesión: sin usuario -> login; con usuario -> inicio de su rol
-    LaunchedEffect(session.checking, user?.uid) {
-        if (session.checking) return@LaunchedEffect
+    val splashDone = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(2000); splashDone.value = true }
+
+    LaunchedEffect(session.checking, user?.uid, splashDone.value) {
+        if (session.checking || !splashDone.value) return@LaunchedEffect
         val current = navController.currentDestination?.route
         if (user == null) {
             if (current !in Routes.authRoutes || current == Routes.SPLASH) navController.clearAndGo(Routes.LOGIN)
@@ -62,7 +65,7 @@ fun AppNavGraph() {
     }
 
     NavHost(navController = navController, startDestination = Routes.SPLASH) {
-        composable(Routes.SPLASH) { LoadingBox() }
+        composable(Routes.SPLASH) { pe.edu.esan.sportpro.presentation.splash.SplashScreen() }
 
         // Comunes
         composable(Routes.HOME) {

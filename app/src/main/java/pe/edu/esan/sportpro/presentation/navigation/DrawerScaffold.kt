@@ -76,6 +76,7 @@ fun DrawerScaffold(
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    pe.edu.esan.sportpro.presentation.components.StatusBarIcons(white = true)
     val currentRoute = navController.currentBackStackEntry?.destination?.route
 
     ModalNavigationDrawer(
