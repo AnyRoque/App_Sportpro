@@ -65,6 +65,7 @@ fun MatchListScreen(
 ) {
     val matches by viewModel.matches.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val error by viewModel.error.collectAsState()
     val isDt = user.roleEnum == Role.DT
 
     var selectedStatusFilter by remember { mutableStateOf("ALL") }
@@ -105,6 +106,8 @@ fun MatchListScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
                 // Filtro/Clasificación por Estado
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

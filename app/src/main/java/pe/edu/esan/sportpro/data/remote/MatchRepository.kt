@@ -1,10 +1,12 @@
 package pe.edu.esan.sportpro.data.remote
 
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.CallUpItemModel
 import pe.edu.esan.sportpro.data.model.CallUpStatus
@@ -195,7 +197,7 @@ object MatchRepository {
     suspend fun cancelMatch(matchId: String, reason: String, dtUid: String): Result<Unit> {
         return try {
             val doc = matches.document(matchId).get().await()
-            val match = doc.toObject(MatchModel::class.java) ?: throw Exception("Partido no encontrado")
+            val match = doc.toMatchModel() ?: throw Exception("Partido no encontrado")
 
             if (match.dtUid != dtUid) throw Exception("No tienes permisos para cancelar este partido")
 
@@ -227,7 +229,7 @@ object MatchRepository {
     suspend fun getMatch(matchId: String): Result<MatchModel> {
         return try {
             val doc = matches.document(matchId).get().await()
-            val model = doc.toObject(MatchModel::class.java) ?: throw Exception("Partido no encontrado")
+            val model = doc.toMatchModel() ?: throw Exception("Partido no encontrado")
             Result.success(model)
         } catch (e: Exception) {
             Result.failure(e)
@@ -244,11 +246,13 @@ object MatchRepository {
                     close(error)
                     return@addSnapshotListener
                 }
-                val list = snapshot?.toObjects(MatchModel::class.java).orEmpty()
-                trySend(list)
+                trySend(snapshot?.documents.orEmpty())
             }
         awaitClose { registration.remove() }
-    }
+    }.map { documents -> documents.mapNotNull { it.toMatchModel() } }
+
+    private fun DocumentSnapshot.toMatchModel(): MatchModel? =
+        toObject(MatchModel::class.java)?.copy(id = id)
 
     private suspend fun fetchTeamMemberUids(teamId: String, dtUid: String): List<String> {
         val set = mutableSetOf(dtUid)
@@ -401,7 +405,7 @@ object MatchRepository {
             // Notificar al DT del partido
             try {
                 val matchDoc = matches.document(matchId).get().await()
-                val m = matchDoc.toObject(MatchModel::class.java)
+                val m = matchDoc.toMatchModel()
                 if (m != null && m.dtUid.isNotBlank()) {
                     val itemDoc = ref.get().await()
                     val item = itemDoc.toObject(CallUpItemModel::class.java)
@@ -529,10 +533,8 @@ object MatchRepository {
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists()) {
-                    val match = snapshot.toObject(MatchModel::class.java)
-                    val isFromCache = snapshot.metadata.isFromCache
-                    if (match != null) {
-                        trySend(Pair(match.copy(id = snapshot.id), isFromCache))
+                    snapshot.toMatchModel()?.let { match ->
+                        trySend(match to snapshot.metadata.isFromCache)
                     }
                 }
             }
@@ -583,7 +585,7 @@ object MatchRepository {
             try {
                 if (event.type == pe.edu.esan.sportpro.data.model.EventType.GOAL || event.type == pe.edu.esan.sportpro.data.model.EventType.RED_CARD) {
                     val matchDoc = matches.document(event.matchId).get().await()
-                    val m = matchDoc.toObject(MatchModel::class.java)
+                    val m = matchDoc.toMatchModel()
                     if (m != null) {
                         val recipients = m.memberUids.filter { it != event.registeredBy }
                         if (recipients.isNotEmpty()) {

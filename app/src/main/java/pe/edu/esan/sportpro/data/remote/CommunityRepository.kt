@@ -1,11 +1,13 @@
 package pe.edu.esan.sportpro.data.remote
 
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.CommentModel
 import pe.edu.esan.sportpro.data.model.ModerationAction
@@ -43,18 +45,22 @@ object CommunityRepository {
         val reg = posts.orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
             .addSnapshotListener { snap, error ->
                 if (error != null) { close(error); return@addSnapshotListener }
-                trySend(snap?.toObjects(PostModel::class.java).orEmpty())
+                trySend(snap?.documents.orEmpty())
             }
         awaitClose { reg.remove() }
-    }
+    }.map { documents -> documents.mapNotNull { it.toPostModel() } }
 
     fun observePost(postId: String): Flow<PostModel?> = callbackFlow {
         val reg = posts.document(postId).addSnapshotListener { snap, error ->
             if (error != null) { close(error); return@addSnapshotListener }
-            trySend(snap?.toObject(PostModel::class.java))
+            trySend(snap)
         }
         awaitClose { reg.remove() }
-    }
+    }.map { it?.toPostModel() }
+
+    // Algunas publicaciones antiguas incluyen un campo "id".
+    private fun DocumentSnapshot.toPostModel(): PostModel? =
+        toObject(PostModel::class.java)?.copy(id = id)
 
     suspend fun createPost(post: PostModel): Result<Unit> = try {
         if (containsOffensiveWords(post.text)) throw Exception("La publicación contiene palabras no permitidas")

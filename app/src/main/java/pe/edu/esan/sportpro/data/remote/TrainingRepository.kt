@@ -1,11 +1,17 @@
 package pe.edu.esan.sportpro.data.remote
 
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.ExerciseModel
 import pe.edu.esan.sportpro.data.model.NotificationModel
@@ -147,7 +153,7 @@ object TrainingRepository {
     suspend fun cancelTraining(trainingId: String, reason: String, dtUid: String): Result<Unit> {
         return try {
             val doc = trainings.document(trainingId).get().await()
-            val training = doc.toObject(TrainingModel::class.java) ?: throw Exception("Entrenamiento no encontrado")
+            val training = doc.toTrainingModel() ?: throw Exception("Entrenamiento no encontrado")
 
             if (training.dtUid != dtUid) throw Exception("No tienes permiso para cancelar esta sesión")
 
@@ -177,7 +183,7 @@ object TrainingRepository {
     suspend fun getTraining(trainingId: String): Result<TrainingModel> {
         return try {
             val doc = trainings.document(trainingId).get().await()
-            val model = doc.toObject(TrainingModel::class.java) ?: throw Exception("Sesión no encontrada")
+            val model = doc.toTrainingModel() ?: throw Exception("Sesión no encontrada")
             Result.success(model)
         } catch (e: Exception) {
             Result.failure(e)
@@ -199,87 +205,41 @@ object TrainingRepository {
     /**
      * Observa las sesiones según el rol del usuario (DT, JUG o PAD).
      */
-    fun observeTrainingsForUser(user: UserModel): Flow<List<TrainingModel>> = callbackFlow {
-        if (user.roleEnum == Role.DT) {
-            val registration = trainings.whereEqualTo("dtUid", user.uid)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        close(error)
-                        return@addSnapshotListener
-                    }
-                    val list = snapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                    trySend(list)
-                }
-            awaitClose { registration.remove() }
-        } else if (user.roleEnum == Role.PAD) {
-            val playerQuery = players.whereEqualTo("parentUid", user.uid)
-            val registration = playerQuery.addSnapshotListener { pSnapshot, pError ->
-                if (pError != null) {
-                    close(pError)
-                    return@addSnapshotListener
-                }
-                val teamIds = pSnapshot?.toObjects(PlayerModel::class.java).orEmpty()
-                    .map { it.teamId }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeTrainingsForUser(user: UserModel): Flow<List<TrainingModel>> {
+        if (user.roleEnum == Role.DT) return observeTrainingsByDt(user.uid)
+
+        val playerField = if (user.roleEnum == Role.PAD) "parentUid" else "userUid"
+        return observeDocuments(players.whereEqualTo(playerField, user.uid))
+            .map { documents ->
+                documents.mapNotNull { it.getString("teamId") }
                     .filter { it.isNotBlank() }
                     .distinct()
-
-                if (teamIds.isEmpty()) {
-                    trySend(emptyList())
-                } else {
-                    trainings.whereIn("teamId", teamIds.take(10))
-                        .addSnapshotListener { tSnapshot, tError ->
-                            if (tError != null) {
-                                close(tError)
-                                return@addSnapshotListener
-                            }
-                            val list = tSnapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                            trySend(list)
-                        }
-                }
+                    .take(10)
             }
-            awaitClose { registration.remove() }
-        } else {
-            // JUG
-            val playerQuery = players.whereEqualTo("userUid", user.uid)
-            val registration = playerQuery.addSnapshotListener { pSnapshot, pError ->
-                if (pError != null) {
-                    close(pError)
-                    return@addSnapshotListener
-                }
-                val teamIds = pSnapshot?.toObjects(PlayerModel::class.java).orEmpty()
-                    .map { it.teamId }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-
-                if (teamIds.isEmpty()) {
-                    trySend(emptyList())
-                } else {
-                    trainings.whereIn("teamId", teamIds.take(10))
-                        .addSnapshotListener { tSnapshot, tError ->
-                            if (tError != null) {
-                                close(tError)
-                                return@addSnapshotListener
-                            }
-                            val list = tSnapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                            trySend(list)
-                        }
-                }
+            .distinctUntilChanged()
+            .flatMapLatest { teamIds ->
+                if (teamIds.isEmpty()) flowOf(emptyList())
+                else observe(trainings.whereIn("teamId", teamIds))
             }
-            awaitClose { registration.remove() }
-        }
     }
 
-    private fun observe(query: Query): Flow<List<TrainingModel>> = callbackFlow {
+    private fun observe(query: Query): Flow<List<TrainingModel>> =
+        observeDocuments(query).map { documents -> documents.mapNotNull { it.toTrainingModel() } }
+
+    private fun observeDocuments(query: Query): Flow<List<DocumentSnapshot>> = callbackFlow {
         val registration = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
                 close(error)
                 return@addSnapshotListener
             }
-            val list = snapshot?.toObjects(TrainingModel::class.java).orEmpty()
-            trySend(list)
+            trySend(snapshot?.documents.orEmpty())
         }
         awaitClose { registration.remove() }
     }
+
+    private fun DocumentSnapshot.toTrainingModel(): TrainingModel? =
+        toObject(TrainingModel::class.java)?.copy(id = id)
 
     /**
      * Genera y guarda notificaciones en Firestore para todos los destinatarios del equipo.

@@ -64,7 +64,7 @@ object ReactionType {
 
 /** Documento posts/{id} */
 data class PostModel(
-    @DocumentId var id: String = "",
+    @get:Exclude val id: String = "",
     val text: String = "",
     val imageUrl: String = "",
     val visibility: String = PostVisibility.TEAM,

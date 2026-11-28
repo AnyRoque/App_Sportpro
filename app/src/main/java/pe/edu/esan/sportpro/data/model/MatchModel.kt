@@ -1,7 +1,6 @@
 package pe.edu.esan.sportpro.data.model
 
 import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.Exclude
 import com.google.firebase.firestore.ServerTimestamp
 
@@ -46,7 +45,7 @@ object MatchModality {
  * Documento matches/{matchId} (US-16: Programación de Partidos).
  */
 data class MatchModel(
-    @DocumentId var id: String = "",
+    @get:Exclude val id: String = "",
     val dtUid: String = "",
     val dtName: String = "",
     val teamId: String = "",
