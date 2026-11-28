@@ -22,6 +22,7 @@ import pe.edu.esan.sportpro.presentation.home.HomeScreen
 import pe.edu.esan.sportpro.presentation.matches.matchesGraph
 import pe.edu.esan.sportpro.presentation.players.playersGraph
 import pe.edu.esan.sportpro.presentation.profile.ProfileScreen
+import pe.edu.esan.sportpro.presentation.stats.statsGraph
 import pe.edu.esan.sportpro.presentation.teams.teamApprovalGraph
 import pe.edu.esan.sportpro.presentation.teams.teamsGraph
 import pe.edu.esan.sportpro.presentation.training.trainingGraph
@@ -89,6 +90,7 @@ fun AppNavGraph() {
         playersGraph(sec)                          // US-04
         teamApprovalGraph(sec)                     // US-07
         trainingGraph(sec)                         // US-11
+        statsGraph(sec)                            // US-15
         matchesGraph(sec)                          // US-16
         communityGraph(sec)                        // US-22 a US-27
         tryoutsGraph(sec)                          // US-10

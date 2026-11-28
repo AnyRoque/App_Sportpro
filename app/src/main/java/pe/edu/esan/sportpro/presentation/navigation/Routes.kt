@@ -52,6 +52,9 @@ object Routes {
     // JUG / PAD – Consulta de Historial de Asistencia Personal (US-14)
     const val USER_ATTENDANCE_HISTORY = "user_attendance_history"
 
+    // JUG / PAD / DT – Consulta de Estadísticas Acumuladas (US-15)
+    const val STATS = "stats"
+
     // DT / JUG / PAD – Partidos (US-16)
     const val MATCHES = "matches"
     const val MATCH_FORM = "match_form?matchId={matchId}"

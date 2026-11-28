@@ -87,19 +87,20 @@ fun HomeScreen(user: UserModel, onNavigate: (String) -> Unit) {
     val communityShortcut = Shortcut("Comunidad", "Publicaciones de tu equipo y la academia", Routes.COMMUNITY, Icons.Default.Favorite)
     val summariesShortcut = Shortcut("Resúmenes de partidos", "Crónicas generadas con IA y revisadas por el DT", Routes.SUMMARIES, Icons.Default.Star)
     val userAttendanceShortcut = Shortcut("Mi Asistencia", "Porcentaje de asistencia y desglose de sesiones", Routes.USER_ATTENDANCE_HISTORY, Icons.Default.CheckCircle)
+    val statsShortcut = Shortcut("Estadísticas Acumuladas", "Consulta el rendimiento acumulado por jugador y equipo", Routes.STATS, Icons.Default.Star)
 
     val shortcuts = when (user.roleEnum) {
         Role.ADM -> listOf(Shortcut("Validar equipos", "Aprueba o rechaza equipos registrados", Routes.TEAM_APPROVAL, Icons.Default.CheckCircle))
         Role.DT -> listOf(
             Shortcut("Mis equipos", "Registra equipos y gestiona tu plantel", Routes.MY_TEAMS, Icons.AutoMirrored.Filled.List),
-            matchesShortcut, trainingsShortcut, tryoutsShortcut, announcementsShortcut, communityShortcut, summariesShortcut
+            matchesShortcut, trainingsShortcut, statsShortcut, tryoutsShortcut, announcementsShortcut, communityShortcut, summariesShortcut
         )
         Role.PAD -> listOf(
             Shortcut("Mis hijos", "Registra a tus hijos y vincúlalos a su equipo", Routes.MY_CHILDREN, Icons.Default.Face),
-            tryoutsShortcut, matchesShortcut, trainingsShortcut, userAttendanceShortcut, announcementsShortcut, communityShortcut, summariesShortcut
+            tryoutsShortcut, matchesShortcut, trainingsShortcut, statsShortcut, userAttendanceShortcut, announcementsShortcut, communityShortcut, summariesShortcut
         )
         Role.JUG -> listOf(
-            tryoutsShortcut, matchesShortcut, trainingsShortcut, userAttendanceShortcut, announcementsShortcut, communityShortcut, summariesShortcut
+            tryoutsShortcut, matchesShortcut, trainingsShortcut, statsShortcut, userAttendanceShortcut, announcementsShortcut, communityShortcut, summariesShortcut
         )
         null -> emptyList()
     }
