@@ -68,6 +68,10 @@ object TeamRepository {
         }
     }
 
+    suspend fun updateEmblem(teamId: String, emblemPath: String) {
+        ids.update(teams.document(teamId), mapOf("emblemPath" to emblemPath))
+    }
+
     suspend fun getTeam(teamId: String): Result<TeamModel> {
         return try {
             val doc = teams.document(teamId).get().await()

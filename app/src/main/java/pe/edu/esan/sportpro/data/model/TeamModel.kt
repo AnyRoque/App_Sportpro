@@ -21,7 +21,8 @@ data class TeamModel(
     val rejectReason: String = "",
     val reviewedBy: String = "",
     val reviewedAt: Timestamp? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    val emblemPath: String = ""
 ) {
     @get:DocumentId
     var firestoreDocumentId: String

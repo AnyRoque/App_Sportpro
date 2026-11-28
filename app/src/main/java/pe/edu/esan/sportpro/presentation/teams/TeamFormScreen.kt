@@ -1,9 +1,13 @@
 package pe.edu.esan.sportpro.presentation.teams
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,12 +19,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import pe.edu.esan.sportpro.data.model.Catalogs
@@ -40,6 +47,10 @@ fun TeamFormScreen(
     viewModel: TeamFormViewModel = viewModel()
 ) {
     val s by viewModel.state.collectAsState()
+    val context = LocalContext.current.applicationContext
+    val pickEmblem = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) viewModel.selectEmblem(uri)
+    }
     LaunchedEffect(teamId) { viewModel.load(teamId) }
 
     if (s.loading) {
@@ -69,6 +80,24 @@ fun TeamFormScreen(
         FormTextField(s.field, { v -> viewModel.onChange { it.copy(field = v) } }, "Campo de entrenamiento *", error = s.errors["field"])
         FormTextField(s.district, { v -> viewModel.onChange { it.copy(district = v) } }, "Distrito *", error = s.errors["district"])
 
+        if (teamId == null) {
+            SectionTitle("Emblema del equipo (opcional)")
+            s.emblemUri?.let { TeamEmblem(it, Modifier.size(88.dp)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { pickEmblem.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    enabled = !s.saving && !s.saved
+                ) {
+                    Text(if (s.emblemUri == null) "Elegir imagen" else "Cambiar imagen")
+                }
+                if (s.emblemUri != null) {
+                    TextButton(onClick = { viewModel.selectEmblem(null) }, enabled = !s.saving && !s.saved) {
+                        Text("Quitar")
+                    }
+                }
+            }
+        }
+
         SectionTitle("Horario de entrenamiento")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Catalogs.weekDays.forEach { day ->
@@ -87,7 +116,11 @@ fun TeamFormScreen(
 
         s.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
-        Button(onClick = { viewModel.save(dt) }, enabled = !s.saving, modifier = Modifier.fillMaxWidth()) {
+        Button(
+            onClick = { viewModel.save(dt, context) },
+            enabled = !s.saving && !s.saved && (teamId == null || s.editingId == teamId),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             if (s.saving) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             else Text(if (s.editingId == null) "Registrar equipo" else "Corregir y reenviar")
         }

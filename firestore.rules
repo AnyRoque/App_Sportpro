@@ -217,13 +217,22 @@ service cloud.firestore {
 
     // ---------- Equipos (US-03, US-07) ----------
     match /teams/{teamId} {
+      function validEmblem() {
+        let image = request.resource.data.get('emblemPath', '');
+        return image is string && (image == '' || (image.size() <= 180
+          && image.matches('[^/]+/equipo_[a-z0-9-]+[.]jpg')
+          && image.split('/')[0] == request.resource.data.dtUid));
+      }
+
       allow read: if signedIn();
       allow create: if isDt()
                     && request.resource.data.dtUid == request.auth.uid
                     && request.resource.data.status == 'PENDIENTE'
+        && validEmblem()
         && record('teams', 'EQU', teamId, 'teams/' + teamId);
       // El DT edita su equipo sin poder aprobarlo; el ADM aprueba o rechaza
-      allow update: if stable() && (isAdmin()
+      allow update: if stable() && (!changed().hasAny(['emblemPath']) || validEmblem())
+        && (isAdmin()
                     || (isDt() && !changed().hasAny(['dtUid']) && resource.data.dtUid == request.auth.uid
                         && (request.resource.data.status == resource.data.status
                             || request.resource.data.status == 'PENDIENTE')));

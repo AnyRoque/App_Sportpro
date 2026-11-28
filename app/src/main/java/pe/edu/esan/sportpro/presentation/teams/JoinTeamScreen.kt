@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,7 @@ import pe.edu.esan.sportpro.data.model.Catalogs
 import pe.edu.esan.sportpro.data.model.LinkStatus
 import pe.edu.esan.sportpro.data.model.TeamModel
 import pe.edu.esan.sportpro.data.model.UserModel
+import pe.edu.esan.sportpro.data.remote.CommunityImageStorage
 import pe.edu.esan.sportpro.presentation.components.DropdownField
 import pe.edu.esan.sportpro.presentation.components.EmptyState
 import pe.edu.esan.sportpro.presentation.components.LoadingBox
@@ -141,13 +143,17 @@ private fun JoinTeamCard(
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (team.emblemPath.isNotBlank()) {
+                    TeamEmblem(CommunityImageStorage.publicUrl(team.emblemPath), Modifier.size(44.dp))
+                }
                 Text(
                     text = team.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
                 existingRequestStatus?.let { status ->
                     StatusChip(status)

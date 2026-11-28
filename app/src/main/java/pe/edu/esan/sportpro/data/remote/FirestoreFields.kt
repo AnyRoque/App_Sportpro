@@ -32,6 +32,7 @@ private fun sportTimestamp(day: String, time: String): com.google.firebase.Times
 internal fun TeamModel.firestoreFields(): Map<String, Any?> = mapOf(
     "name" to name,
     "nameKey" to nameKey,
+    "emblemPath" to emblemPath,
     "category" to category,
     "field" to field,
     "district" to district,

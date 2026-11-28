@@ -28,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import pe.edu.esan.sportpro.data.model.AdminModel
 import pe.edu.esan.sportpro.data.model.TeamModel
+import pe.edu.esan.sportpro.data.model.TeamStatus
 import pe.edu.esan.sportpro.data.model.PostModel
 import pe.edu.esan.sportpro.data.model.PlayerModel
 import pe.edu.esan.sportpro.data.model.AttendanceRecordModel
@@ -93,7 +94,8 @@ class FirestoreEmulatorTest {
                             name = "Equipo $letter $unique",
                             category = "Sub-18",
                             dtUid = coach.uid,
-                            dtName = coach.fullName
+                            dtName = coach.fullName,
+                            emblemPath = if (letter == "A") "${coach.uid}/equipo_first.jpg" else ""
                         )).getOrThrow()
                     }
                 }
@@ -106,6 +108,8 @@ class FirestoreEmulatorTest {
             val saved = query.get(Source.SERVER).await().documents
             assertEquals(2, saved.size)
             assertNotEquals(saved[0].id, saved[1].id)
+            val emblems = saved.mapNotNull { it.toObject(TeamModel::class.java)?.emblemPath }
+            assertEquals(setOf("", "${coach.uid}/equipo_first.jpg"), emblems.toSet())
             assertTrue(saved.all { doc ->
                 doc.id.matches(Regex("SP-EQU-[0-9]{6}")) &&
                     doc.getString("id") == doc.id &&
@@ -217,6 +221,11 @@ class FirestoreEmulatorTest {
             seedDemoAdministrator(administrator.uid)
             TeamRepository.approveTeam(teamId, administrator.uid).getOrThrow()
             FirebaseAuthManager.loginUser(coach.email, "sportpro-demo").getOrThrow()
+            val emblem = "${coach.uid}/equipo_new.jpg"
+            TeamRepository.updateEmblem(teamId, emblem)
+            val teamWithEmblem = TeamRepository.getTeam(teamId).getOrThrow()
+            assertEquals(emblem, teamWithEmblem.emblemPath)
+            assertEquals(TeamStatus.APPROVED, teamWithEmblem.status)
 
             val linkedAccount = registerPlayer("member-$unique")
             FirebaseAuthManager.loginUser(coach.email, "sportpro-demo").getOrThrow()
@@ -294,7 +303,12 @@ class FirestoreEmulatorTest {
                     (deniedRead as? FirebaseFirestoreException)?.code)
             }
 
-            registerCoach("other-$unique")
+            val otherCoach = registerCoach("other-$unique")
+            val emblemFailure = runCatching {
+                TeamRepository.updateEmblem(teamId, "${otherCoach.uid}/equipo_other.jpg")
+            }.exceptionOrNull()
+            assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED,
+                (emblemFailure as? FirebaseFirestoreException)?.code)
             val training = firestore.collection("trainings").document(trainingId)
             val projection = firestore.collection("players").document(playerId)
                 .collection("attendanceHistory").document(trainingId)

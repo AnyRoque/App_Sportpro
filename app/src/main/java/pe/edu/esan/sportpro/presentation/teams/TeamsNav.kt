@@ -17,6 +17,7 @@ fun NavGraphBuilder.teamsGraph(sec: SecuredContext) {
         sec.Secured("Mis equipos", setOf(Role.DT, Role.JUG, Role.PAD)) { u ->
             MyTeamsScreen(
                 dtUid = u.uid,
+                canEditEmblem = u.roleEnum == Role.DT,
                 onNewTeam = { nav.navigate(Routes.teamForm()) },
                 onOpenRoster = { team -> nav.navigate(Routes.roster(team.id)) },
                 onFixTeam = { team -> nav.navigate(Routes.teamForm(team.id)) }
