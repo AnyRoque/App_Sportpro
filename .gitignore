@@ -15,3 +15,6 @@
 local.properties
 
 build/
+
+firebase-debug.log
+.idea/
