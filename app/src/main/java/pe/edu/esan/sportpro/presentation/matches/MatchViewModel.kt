@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.MatchCondition
 import pe.edu.esan.sportpro.data.model.MatchModality
@@ -64,10 +65,16 @@ class MatchViewModel : ViewModel() {
     fun loadMatchesForUser(user: UserModel) {
         viewModelScope.launch {
             _isLoading.value = true
-            MatchRepository.observeMatchesForUser(user).collect { list ->
-                _matches.value = list.sortedByDescending { it.date }
-                _isLoading.value = false
-            }
+            _error.value = null
+            MatchRepository.observeMatchesForUser(user)
+                .catch {
+                    _error.value = "No se pudieron cargar los partidos"
+                    _isLoading.value = false
+                }
+                .collect { list ->
+                    _matches.value = list.sortedByDescending { it.date }
+                    _isLoading.value = false
+                }
         }
     }
 

@@ -35,7 +35,7 @@ data class ExerciseModel(
  * Documento trainings/{trainingId} (US-11: Planificación de sesiones de entrenamiento).
  */
 data class TrainingModel(
-    @DocumentId var id: String = "",
+    @get:Exclude val id: String = "",
     val dtUid: String = "",
     val dtName: String = "",
     val teamId: String = "",
