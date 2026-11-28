@@ -13,7 +13,6 @@ import pe.edu.esan.sportpro.data.model.TeamModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
-import java.util.UUID
 
 /**
  * Repositorio para la gestión de mensualidades (US-08).
@@ -123,42 +122,33 @@ object MonthlyFeeRepository {
             }
 
             val playerRef = playersCollection.document(cleanPlayerId)
-            val docSnapshot = playerRef.get().await()
-
-            if (!docSnapshot.exists()) {
-                return Result.failure(Exception("El documento del jugador no existe en el sistema."))
+            val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
+            val ids = SportProIdGenerator(firestore)
+            val newId = ids.transact { tx ->
+                val snapshot = tx.get(playerRef)
+                check(snapshot.exists()) { "El documento del jugador no existe en el sistema." }
+                val current = snapshot.get(FIELD_MONTHLY_FEES) as? List<Map<String, Any?>> ?: emptyList()
+                check(current.none { MonthlyFeeModel.fromMap(it, cleanPlayerId).period.equals(cleanPeriod, ignoreCase = true) }) {
+                    "Ya existe una mensualidad registrada para este jugador en el periodo $cleanPeriod."
+                }
+                val initialStatus = if (isDueDatePassed(fee.dueDate)) MonthlyFeeStatus.EXPIRED
+                    else fee.status.ifBlank { MonthlyFeeStatus.PENDING }
+                val (allocation, id) = ids.allocate(tx, firestore.collection("feeIndex"), SportProEntity.MONTHLY_FEE)
+                val audit = ids.prepareAudit(tx, uid, playerRef, "UPDATE", listOf(FIELD_MONTHLY_FEES))
+                val feeToSave = fee.copy(
+                    id = id, playerId = cleanPlayerId, period = cleanPeriod,
+                    status = initialStatus, createdAt = Timestamp.now()
+                )
+                tx.update(playerRef, mapOf(
+                    FIELD_MONTHLY_FEES to current + feeToSave.toMap(),
+                    "latestFeeId" to id,
+                    "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                    "updatedByUid" to uid
+                ))
+                allocation.commit(tx, mapOf("playerId" to cleanPlayerId) + ids.creationMetadata(uid))
+                audit()
+                id
             }
-
-            val existingRawList = docSnapshot.get(FIELD_MONTHLY_FEES) as? List<Map<String, Any?>> ?: emptyList()
-            val existingFees = existingRawList.map { MonthlyFeeModel.fromMap(it, fallbackPlayerId = cleanPlayerId) }
-
-            // Validar si ya existe una mensualidad registrada para el mismo playerId y period
-            val hasDuplicate = existingFees.any { it.period.equals(cleanPeriod, ignoreCase = true) }
-            if (hasDuplicate) {
-                return Result.failure(Exception("Ya existe una mensualidad registrada para este jugador en el periodo $cleanPeriod."))
-            }
-
-            val initialStatus = if (isDueDatePassed(fee.dueDate)) {
-                MonthlyFeeStatus.EXPIRED
-            } else {
-                fee.status.ifBlank { MonthlyFeeStatus.PENDING }
-            }
-
-            val newId = UUID.randomUUID().toString()
-            val feeToSave = fee.copy(
-                id = newId,
-                playerId = cleanPlayerId,
-                period = cleanPeriod,
-                status = initialStatus,
-                createdAt = Timestamp.now()
-            )
-
-            val updatedListMaps = existingRawList.toMutableList().apply {
-                add(feeToSave.toMap())
-            }
-
-            // Actualización quirúrgica únicamente del campo "monthlyFees" del jugador
-            playerRef.update(FIELD_MONTHLY_FEES, updatedListMaps).await()
             Result.success(newId)
         } catch (e: Exception) {
             Result.failure(e)
@@ -173,31 +163,16 @@ object MonthlyFeeRepository {
     @Suppress("UNCHECKED_CAST")
     suspend fun updateFeeStatus(playerId: String, feeId: String, newStatus: String, updatedByAdmin: String): Result<Unit> {
         return try {
-            val playerRef = playersCollection.document(playerId)
-            val docSnapshot = playerRef.get().await()
-
-            if (!docSnapshot.exists()) {
-                return Result.failure(Exception("Jugador no encontrado."))
-            }
-
-            val existingRawList = docSnapshot.get(FIELD_MONTHLY_FEES) as? List<Map<String, Any?>> ?: emptyList()
-            val updatedListMaps = existingRawList.map { map ->
-                val currentId = map["id"] as? String ?: ""
-                if (currentId == feeId) {
-                    val mutableMap = map.toMutableMap()
-                    mutableMap["status"] = newStatus
-                    mutableMap["updatedBy"] = updatedByAdmin
-                    if (newStatus == MonthlyFeeStatus.PAID) {
-                        mutableMap["updatedAt"] = Timestamp.now()
-                    }
-                    mutableMap
-                } else {
-                    map
+            updateMonthlyFees(playerId) { current ->
+                check(current.any { it["id"] == feeId }) { "No se encontró la mensualidad" }
+                current.map { fee ->
+                    if (fee["id"] == feeId) fee + mapOf(
+                        "status" to newStatus,
+                        "updatedBy" to updatedByAdmin,
+                        "updatedAt" to Timestamp.now()
+                    ) else fee
                 }
             }
-
-            // Actualizar solo el campo "monthlyFees"
-            playerRef.update(FIELD_MONTHLY_FEES, updatedListMaps).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -214,30 +189,43 @@ object MonthlyFeeRepository {
             val groupedByPlayer = expiredPendingFees.groupBy { it.playerId }
 
             for ((playerId, playerExpiredFees) in groupedByPlayer) {
-                val playerRef = playersCollection.document(playerId)
-                val docSnapshot = playerRef.get().await()
-                if (!docSnapshot.exists()) continue
-
                 val expiredIds = playerExpiredFees.map { it.id }.toSet()
-                val existingRawList = docSnapshot.get(FIELD_MONTHLY_FEES) as? List<Map<String, Any?>> ?: emptyList()
-
-                val updatedListMaps = existingRawList.map { map ->
-                    val currentId = map["id"] as? String ?: ""
-                    if (currentId in expiredIds) {
-                        val mutableMap = map.toMutableMap()
-                        mutableMap["status"] = MonthlyFeeStatus.EXPIRED
-                        mutableMap["updatedBy"] = "SISTEMA_AUTO"
-                        mutableMap
-                    } else {
-                        map
+                updateMonthlyFees(playerId) { current ->
+                    current.map { fee ->
+                        if (fee["id"] in expiredIds && fee["status"] == MonthlyFeeStatus.PENDING) {
+                            fee + mapOf("status" to MonthlyFeeStatus.EXPIRED, "updatedBy" to "SISTEMA_AUTO")
+                        } else fee
                     }
                 }
-
-                playerRef.update(FIELD_MONTHLY_FEES, updatedListMaps).await()
             }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun updateMonthlyFees(
+        playerId: String,
+        transform: (List<Map<String, Any?>>) -> List<Map<String, Any?>>
+    ) {
+        val player = playersCollection.document(playerId)
+        val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
+        val ids = SportProIdGenerator(firestore)
+        ids.transact { tx ->
+            val snapshot = tx.get(player)
+            check(snapshot.exists()) { "Jugador no encontrado" }
+            val existing = snapshot.get(FIELD_MONTHLY_FEES) as? List<Map<String, Any?>> ?: emptyList()
+            val updated = transform(existing)
+            if (updated != existing) {
+                val audit = ids.prepareAudit(tx, uid, player, "UPDATE", listOf(FIELD_MONTHLY_FEES))
+                tx.update(player, mapOf(
+                    FIELD_MONTHLY_FEES to updated,
+                    "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                    "updatedByUid" to uid
+                ))
+                audit()
+            }
         }
     }
 

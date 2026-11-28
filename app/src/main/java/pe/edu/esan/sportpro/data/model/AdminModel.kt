@@ -1,6 +1,8 @@
 package pe.edu.esan.sportpro.data.model
 
+import com.google.firebase.Timestamp
 import com.google.firebase.firestore.Exclude
+import com.google.firebase.firestore.ServerTimestamp
 
 /**
  * Modelo para la colección de Administradores Autorizados ("Admins").
@@ -14,7 +16,7 @@ data class AdminModel(
     val club: String = "",
     val role: String = Role.ADM.name,
     val createdBy: String = "",
-    val createdAt: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
     val active: Boolean = true
 ) {
     @get:Exclude

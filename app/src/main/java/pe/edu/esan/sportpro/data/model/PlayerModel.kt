@@ -10,7 +10,7 @@ import com.google.firebase.firestore.ServerTimestamp
  * Lo crea el DT manualmente (US-04) o el PAD al registrar a su hijo (US-02).
  */
 data class PlayerModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val teamId: String = "",
     val teamName: String = "",
     val category: String = "",
@@ -41,6 +41,11 @@ data class PlayerModel(
     val createdBy: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val fullName: String get() = "$name $lastName".trim()
 }

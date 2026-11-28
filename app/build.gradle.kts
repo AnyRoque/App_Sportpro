@@ -33,7 +33,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            val useFirebaseEmulator = providers.gradleProperty("sportproFirebaseEmulator").orNull == "true"
+            buildConfigField("boolean", "USE_FIREBASE_EMULATOR", useFirebaseEmulator.toString())
+        }
         release {
+            buildConfigField("boolean", "USE_FIREBASE_EMULATOR", "false")
             optimization {
                 enable = false
             }

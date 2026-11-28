@@ -26,6 +26,7 @@ object CommunityRepository {
     const val AUTO_HIDE_REPORTS = 3
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val posts get() = firestore.collection(POSTS)
     private val reports get() = firestore.collection(REPORTS)
 
@@ -58,7 +59,7 @@ object CommunityRepository {
 
     suspend fun createPost(post: PostModel): Result<Unit> = try {
         if (containsOffensiveWords(post.text)) throw Exception("La publicación contiene palabras no permitidas")
-        posts.add(post).await()
+        ids.create(posts, SportProEntity.POST, post.firestoreFields())
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -66,7 +67,7 @@ object CommunityRepository {
 
     /** Eliminar propia publicación: se marca como eliminada (no se borra físicamente). */
     suspend fun deletePost(postId: String): Result<Unit> = try {
-        posts.document(postId).update("status", PostStatus.DELETED).await()
+        ids.update(posts.document(postId), mapOf("status" to PostStatus.DELETED), "DEACTIVATE")
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -97,11 +98,10 @@ object CommunityRepository {
     suspend fun addComment(comment: CommentModel): Result<Unit> = try {
         if (containsOffensiveWords(comment.text)) throw Exception("El comentario contiene palabras no permitidas")
         val postRef = posts.document(comment.postId)
-        val commentRef = postRef.collection(COMMENTS).document()
-        firestore.runBatch { b ->
-            b.set(commentRef, comment)
-            b.update(postRef, "commentCount", FieldValue.increment(1))
-        }.await()
+        ids.create(postRef.collection(COMMENTS), SportProEntity.COMMENT, comment.firestoreFields()) { tx, _ ->
+            check(tx.get(postRef).getString("status") == PostStatus.VISIBLE) { "La publicación no está disponible" }
+            ({ tx.update(postRef, "commentCount", FieldValue.increment(1)) })
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -125,21 +125,28 @@ object CommunityRepository {
      * Al llegar a 3 reportes el contenido se oculta temporalmente (no se elimina).
      */
     suspend fun reportPost(post: PostModel, reporterUid: String, reason: String, detail: String): Result<Unit> = try {
-        val reportRef = reports.document("${post.id}_$reporterUid")
-        if (reportRef.get().await().exists()) throw Exception("Ya reportaste esta publicación")
         val report = ReportModel(
             postId = post.id, postText = post.text.take(300),
             postAuthorUid = post.authorUid, postAuthorName = post.authorName,
             reason = reason, detail = detail.trim(), reporterUid = reporterUid
         )
         val postRef = posts.document(post.id)
-        firestore.runBatch { b ->
-            b.set(reportRef, report)
-            b.update(postRef, "reportCount", FieldValue.increment(1))
-            if (post.reportCount + 1 >= AUTO_HIDE_REPORTS && post.status == PostStatus.VISIBLE) {
-                b.update(postRef, "status", PostStatus.HIDDEN)
+        val key = postRef.collection("reportOwners").document(reporterUid)
+        val legacy = reports.document("${post.id}_$reporterUid")
+        ids.create(reports, SportProEntity.REPORT, report.firestoreFields()) { tx, ref ->
+            check(!tx.get(key).exists() && !tx.get(legacy).exists()) { "Ya reportaste esta publicación" }
+            val current = tx.get(postRef)
+            check(current.exists() && current.getString("status") == PostStatus.VISIBLE) {
+                "La publicación ya no está disponible"
             }
-        }.await()
+            val count = (current.getLong("reportCount") ?: 0L) + 1L
+            val updates = mutableMapOf<String, Any>("reportCount" to count)
+            if (count >= AUTO_HIDE_REPORTS) updates["status"] = PostStatus.HIDDEN
+            ({
+                tx.set(key, mapOf("reportId" to ref.id))
+                tx.update(postRef, updates)
+            })
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -200,9 +207,9 @@ object CommunityRepository {
         Result.failure(e)
     }
 
-    private fun notify(uid: String, title: String, message: String, postId: String) {
+    private suspend fun notify(uid: String, title: String, message: String, postId: String) {
         if (uid.isBlank()) return
-        firestore.collection(NOTIFICATIONS).add(
+        firestore.collection(NOTIFICATIONS).notifyBestEffort(
             hashMapOf(
                 "recipientUid" to uid, "title" to title, "message" to message,
                 "type" to "COMMUNITY", "relatedId" to postId, "read" to false,

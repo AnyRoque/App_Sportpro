@@ -17,4 +17,6 @@ local.properties
 build/
 
 firebase-debug.log
+firestore-debug.log
+/SportPro-base-*.zip
 .idea/

@@ -15,6 +15,7 @@ object FirebaseAuthManager {
     private const val USERS = "users"
     private val auth = FirebaseAuth.getInstance()
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
 
     val currentUid: String? get() = auth.currentUser?.uid
     val currentUserEmail: String? get() = auth.currentUser?.email
@@ -30,9 +31,24 @@ object FirebaseAuthManager {
             if (Role.fromOrNull(user.role) !in Role.selfRegister)
                 throw Exception("Rol no permitido para registro")
 
-            // 1. Crear usuario en Firebase Auth
-            val authResult = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
-            val uid = authResult.user?.uid ?: throw Exception("Usuario inválido")
+            val authUser = try {
+                auth.createUserWithEmailAndPassword(cleanEmail, password).await().user
+            } catch (collision: FirebaseAuthUserCollisionException) {
+                val existing = try {
+                    auth.signInWithEmailAndPassword(cleanEmail, password).await().user
+                } catch (_: FirebaseAuthInvalidCredentialsException) {
+                    throw collision
+                } catch (_: FirebaseAuthInvalidUserException) {
+                    throw collision
+                }
+                val existingUid = existing?.uid ?: throw collision
+                if (firestore.collection(USERS).document(existingUid)
+                        .get(com.google.firebase.firestore.Source.SERVER).await().exists()) {
+                    throw collision
+                }
+                existing
+            }
+            val uid = authUser?.uid ?: error("Usuario inválido")
 
             // 2. Sincronizar e inscribir en Firestore colección 'users'
             val savedUser = user.copy(
@@ -41,12 +57,14 @@ object FirebaseAuthManager {
                 role = if (user.role.isNotBlank()) user.role else Role.JUG.name,
                 active = true
             )
-            firestore.collection(USERS).document(uid).set(savedUser).await()
-
-            Result.success(savedUser)
+            Result.success(saveProfile(savedUser))
         } catch (e: FirebaseAuthUserCollisionException) {
+            auth.signOut()
             Result.failure(Exception("El correo ya está registrado"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
+            auth.signOut()
             Result.failure(e)
         }
     }
@@ -80,12 +98,8 @@ object FirebaseAuthManager {
             val email = (currentUserEmail ?: "").trim().lowercase()
 
             // 2. Intentar consultar documento en Firestore users/{uid}
-            val doc = try {
-                firestore.collection(USERS).document(uid).get().await()
-            } catch (_: Exception) {
-                null
-            }
-            val existingUser = doc?.toObject(UserModel::class.java)
+            val doc = firestore.collection(USERS).document(uid).get().await()
+            val existingUser = doc.toObject(UserModel::class.java)
 
             if (existingUser != null) {
                 if (!existingUser.active) {
@@ -114,14 +128,26 @@ object FirebaseAuthManager {
                 active = true
             )
 
-            // Guardar automáticamente en Firestore para corregir la inconsistencia
-            try {
-                firestore.collection(USERS).document(uid).set(healedUser).await()
-            } catch (_: Exception) {}
-
-            Result.success(healedUser)
+            Result.success(saveProfile(healedUser))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private suspend fun saveProfile(user: UserModel): UserModel {
+        val entity = if (user.role == Role.DT.name) SportProEntity.DIRECTOR else SportProEntity.USER
+        val users = firestore.collection(USERS)
+        return ids.transact { tx ->
+            val existing = tx.get(users.document(user.uid)).toObject(UserModel::class.java)
+            if (existing != null) {
+                check(existing.active) { "Tu cuenta está desactivada" }
+                return@transact existing.copy(uid = user.uid)
+            }
+            val (record, businessId) = ids.allocate(tx, users, entity, user.uid)
+            val audit = ids.prepareAudit(tx, user.uid, record.reference, "CREATE", emptyList(), businessId)
+            record.commit(tx, user.firestoreFields() + ids.creationMetadata(user.uid) + ("createdBy" to businessId), businessId)
+            audit()
+            user.copy(id = businessId, authUid = user.uid)
         }
     }
 

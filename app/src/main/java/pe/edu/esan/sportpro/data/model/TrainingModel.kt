@@ -35,7 +35,7 @@ data class ExerciseModel(
  * Documento trainings/{trainingId} (US-11: Planificación de sesiones de entrenamiento).
  */
 data class TrainingModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val dtUid: String = "",
     val dtName: String = "",
     val teamId: String = "",
@@ -53,6 +53,11 @@ data class TrainingModel(
     val duplicatedFromId: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val totalExerciseDuration: Int get() = exercises.sumOf { it.durationMinutes }
 
@@ -64,7 +69,7 @@ data class TrainingModel(
  * Notificación enviada a jugadores y padres cuando se crea o cancela un entrenamiento.
  */
 data class NotificationModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val recipientUid: String = "",
     val teamId: String = "",
     val title: String = "",
@@ -73,4 +78,9 @@ data class NotificationModel(
     val relatedId: String = "",
     val read: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

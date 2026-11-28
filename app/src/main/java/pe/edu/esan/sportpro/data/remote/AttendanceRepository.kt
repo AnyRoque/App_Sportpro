@@ -24,6 +24,7 @@ object AttendanceRepository {
     private const val PLAYERS = "players"
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val attendanceRef get() = firestore.collection(ATTENDANCE)
     private val trainingsRef get() = firestore.collection(TRAININGS)
     private val playersRef get() = firestore.collection(PLAYERS)
@@ -33,45 +34,89 @@ object AttendanceRepository {
      */
     suspend fun saveAttendanceRecord(record: AttendanceRecordModel): Result<Unit> {
         return try {
-            val docId = record.trainingId.ifBlank { record.id }
-            val recordToSave = record.copy(
-                id = docId,
-                trainingId = docId,
-                editedAt = null
-            )
+            val trainingId = record.trainingId.ifBlank { record.id }
+            require(trainingId.isNotBlank()) { "Selecciona un entrenamiento" }
+            val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
+            val playerIds = record.items.map { it.playerId }
+            require(playerIds.none { it.isBlank() } && playerIds.distinct().size == playerIds.size) {
+                "Cada jugador debe figurar una sola vez en la asistencia"
+            }
+            ids.transact { tx ->
+                val trainingRef = trainingsRef.document(trainingId)
+                val training = tx.get(trainingRef)
+                check(training.exists() && training.getString("teamId") == record.teamId) {
+                    "El entrenamiento no pertenece al equipo seleccionado"
+                }
+                playerIds.forEach { id ->
+                    val player = tx.get(playersRef.document(id))
+                    check(player.exists() && player.getString("teamId") == record.teamId) {
+                        "Hay un jugador que no pertenece al equipo"
+                    }
+                }
 
-            // 1. Guardar en colección 'attendance'
-            attendanceRef.document(docId).set(recordToSave).await()
+                val existingRef = attendanceRef.document(training.getString("attendanceId") ?: trainingId)
+                val existing = tx.get(existingRef)
+                val allocation = if (existing.exists()) null
+                    else ids.allocate(tx, attendanceRef, SportProEntity.ATTENDANCE).first
+                val target = allocation?.reference ?: existingRef
+                val values = mapOf(
+                    "trainingId" to trainingId,
+                    "teamId" to record.teamId,
+                    "teamName" to record.teamName,
+                    "category" to record.category,
+                    "dtUid" to record.dtUid,
+                    "dtName" to record.dtName,
+                    "date" to record.date,
+                    "items" to record.items.map { item ->
+                        mapOf(
+                            "playerId" to item.playerId,
+                            "playerName" to item.playerName,
+                            "photoUrl" to item.photoUrl,
+                            "shirtNumber" to item.shirtNumber,
+                            "position" to item.position,
+                            "status" to item.status,
+                            "justificationReason" to item.justificationReason
+                        )
+                    },
+                    "totalAttended" to record.totalAttended,
+                    "totalLate" to record.totalLate,
+                    "totalAbsent" to record.totalAbsent,
+                    "totalJustified" to record.totalJustified,
+                    "editedBy" to record.editedBy
+                )
+                val audit = ids.prepareAudit(tx, uid, target,
+                    if (allocation == null) "UPDATE" else "CREATE",
+                    if (allocation == null) ids.changedFields(existing, values).keys.sorted() else emptyList())
 
-            // 2. Cambiar estado de la sesión de entrenamiento a 'REALIZADA'
-            trainingsRef.document(docId).update(
-                mapOf(
+                if (allocation != null) {
+                    allocation.commit(tx, values + ids.creationMetadata(uid))
+                } else {
+                    tx.update(target, values + mapOf(
+                        "editedAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                        "updatedByUid" to uid
+                    ))
+                }
+                tx.update(trainingRef, mapOf(
+                    "attendanceId" to target.id,
                     "status" to TrainingStatus.COMPLETED,
                     "completedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            // 3. Registrar el historial en la subcolección de cada jugador
-            record.items.forEach { item ->
-                if (item.playerId.isNotBlank()) {
-                    try {
-                        val playerHistoryRef = playersRef
-                            .document(item.playerId)
-                            .collection("attendanceHistory")
-                            .document(docId)
-
-                        val historyData = hashMapOf(
-                            "trainingId" to docId,
-                            "teamId" to record.teamId,
-                            "teamName" to record.teamName,
-                            "date" to record.date,
-                            "status" to item.status,
-                            "justificationReason" to item.justificationReason,
-                            "recordedAt" to FieldValue.serverTimestamp()
-                        )
-                        playerHistoryRef.set(historyData).await()
-                    } catch (_: Exception) {}
+                ))
+                record.items.forEach { item ->
+                    val history = playersRef.document(item.playerId)
+                        .collection("attendanceHistory").document(trainingId)
+                    tx.set(history, mapOf(
+                        "attendanceId" to target.id,
+                        "trainingId" to trainingId,
+                        "teamId" to record.teamId,
+                        "teamName" to record.teamName,
+                        "date" to record.date,
+                        "status" to item.status,
+                        "justificationReason" to item.justificationReason,
+                        "recordedAt" to FieldValue.serverTimestamp()
+                    ))
                 }
+                audit()
             }
 
             Result.success(Unit)
@@ -83,9 +128,27 @@ object AttendanceRepository {
     /**
      * Obtiene el registro de asistencia de una sesión específica.
      */
+    suspend fun getPlayerAttendanceForTraining(
+        trainingId: String,
+        player: PlayerModel
+    ): Result<pe.edu.esan.sportpro.data.model.PlayerAttendanceItem?> = try {
+        val entry = playersRef.document(player.id).collection("attendanceHistory").document(trainingId)
+            .get().await().toObject(PlayerAttendanceRecord::class.java)
+        Result.success(entry?.let {
+            pe.edu.esan.sportpro.data.model.PlayerAttendanceItem(
+                playerId = player.id, playerName = player.fullName, photoUrl = player.photoUrl,
+                shirtNumber = player.shirtNumber, position = player.position,
+                status = it.status, justificationReason = it.justificationReason
+            )
+        })
+    } catch (error: Exception) {
+        Result.failure(error)
+    }
+
     suspend fun getAttendanceRecord(trainingId: String): Result<AttendanceRecordModel> {
         return try {
-            val doc = attendanceRef.document(trainingId).get().await()
+            val training = trainingsRef.document(trainingId).get().await()
+            val doc = attendanceRef.document(training.getString("attendanceId") ?: trainingId).get().await()
             val model = doc.toObject(AttendanceRecordModel::class.java)
                 ?: throw Exception("No se encontró registro de asistencia para esta sesión")
             Result.success(model)
@@ -99,13 +162,15 @@ object AttendanceRepository {
      */
     suspend fun getLastAttendanceRecordForTeam(teamId: String): Result<AttendanceRecordModel?> {
         return try {
+            val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
             val snapshot = attendanceRef
                 .whereEqualTo("teamId", teamId)
+                .whereEqualTo("dtUid", uid)
                 .get()
                 .await()
 
             val lastRecord = snapshot.toObjects(AttendanceRecordModel::class.java)
-                .sortedByDescending { it.date }
+                .sortedByDescending { Validators.parseDate(it.date) }
                 .firstOrNull()
 
             Result.success(lastRecord)
@@ -189,7 +254,7 @@ object AttendanceRepository {
                     return@addSnapshotListener
                 }
                 val list = snapshot?.toObjects(PlayerAttendanceRecord::class.java).orEmpty()
-                trySend(list.sortedByDescending { it.date })
+                trySend(list.sortedByDescending { Validators.parseDate(it.date) })
             }
 
         awaitClose { registration.remove() }
@@ -199,15 +264,17 @@ object AttendanceRepository {
      * Observa el historial de asistencias de un equipo en tiempo real.
      */
     fun observeAttendanceHistoryByTeam(teamId: String): Flow<List<AttendanceRecordModel>> = callbackFlow {
+        val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
         val registration = attendanceRef
             .whereEqualTo("teamId", teamId)
+            .whereEqualTo("dtUid", uid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     close(error)
                     return@addSnapshotListener
                 }
                 val list = snapshot?.toObjects(AttendanceRecordModel::class.java).orEmpty()
-                trySend(list.sortedByDescending { it.date })
+                trySend(list.sortedByDescending { Validators.parseDate(it.date) })
             }
         awaitClose { registration.remove() }
     }

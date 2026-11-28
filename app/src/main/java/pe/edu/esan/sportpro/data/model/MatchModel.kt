@@ -46,7 +46,7 @@ object MatchModality {
  * Documento matches/{matchId} (US-16: Programación de Partidos).
  */
 data class MatchModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val dtUid: String = "",
     val dtName: String = "",
     val teamId: String = "",
@@ -77,8 +77,14 @@ data class MatchModel(
     val timerIsRunning: Boolean = false,
     val currentPeriod: Int = 0,
     val timerPauseTime: Timestamp? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    val rivalTeamId: String = ""
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val ownScore: Int get() = score["own"] ?: 0
 

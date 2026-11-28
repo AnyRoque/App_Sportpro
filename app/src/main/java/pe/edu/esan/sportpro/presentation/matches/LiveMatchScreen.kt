@@ -38,6 +38,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -59,7 +60,6 @@ import pe.edu.esan.sportpro.presentation.components.SectionTitle
 import pe.edu.esan.sportpro.ui.theme.StatusApproved
 import pe.edu.esan.sportpro.ui.theme.StatusPending
 import pe.edu.esan.sportpro.ui.theme.StatusRejected
-import java.util.Locale
 
 /**
  * Pantalla de Visualización del Marcador y Cronología en Vivo Sin Recarga (US-21).
@@ -221,7 +221,7 @@ private fun LiveScoreboardCard(
     val minutes = (elapsedSeconds % 3600) / 60
     val seconds = elapsedSeconds % 60
 
-    val timeFormatted = String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+    val timeFormatted = String.format(LocalConfiguration.current.locales[0], "%02d:%02d:%02d", hours, minutes, seconds)
 
     val periodText = when {
         match.status == MatchStatus.FINISHED -> "FINAL"

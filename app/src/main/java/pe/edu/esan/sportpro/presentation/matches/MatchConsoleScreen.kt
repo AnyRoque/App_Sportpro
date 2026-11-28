@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -75,7 +76,6 @@ import pe.edu.esan.sportpro.presentation.components.SectionTitle
 import pe.edu.esan.sportpro.ui.theme.StatusApproved
 import pe.edu.esan.sportpro.ui.theme.StatusPending
 import pe.edu.esan.sportpro.ui.theme.StatusRejected
-import java.util.Locale
 
 /**
  * Pantalla Consola de Registro de Eventos en Tiempo Real con Edición, Anulación y Tiempo Extra (US-19 / US-20).
@@ -354,7 +354,7 @@ private fun MatchTimerHeader(
     val minutes = (elapsedSeconds % 3600) / 60
     val seconds = elapsedSeconds % 60
 
-    val timeFormatted = String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+    val timeFormatted = String.format(LocalConfiguration.current.locales[0], "%02d:%02d:%02d", hours, minutes, seconds)
 
     val periodText = when (match.currentPeriod) {
         1 -> "1° Tiempo"

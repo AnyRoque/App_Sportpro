@@ -16,6 +16,7 @@ object TeamRepository {
 
     private const val TEAMS = "teams"
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val teams get() = firestore.collection(TEAMS)
 
     private fun nameKey(name: String, category: String) = "${Validators.normalize(name)}_$category"
@@ -36,7 +37,7 @@ object TeamRepository {
                 status = TeamStatus.PENDING,
                 rejectReason = ""
             )
-            teams.add(toSave).await()
+            ids.create(teams, SportProEntity.TEAM, toSave.firestoreFields())
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -48,7 +49,7 @@ object TeamRepository {
         return try {
             if (existsDuplicate(team.name, team.category, team.id))
                 throw Exception("Ya existe un equipo con ese nombre y categoría")
-            teams.document(team.id).update(
+            ids.update(teams.document(team.id),
                 mapOf(
                     "name" to team.name.trim(),
                     "nameKey" to nameKey(team.name, team.category),
@@ -60,7 +61,7 @@ object TeamRepository {
                     "status" to TeamStatus.PENDING,
                     "rejectReason" to ""
                 )
-            ).await()
+            )
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -113,14 +114,14 @@ object TeamRepository {
 
     private suspend fun review(teamId: String, adminUid: String, status: String, reason: String): Result<Unit> {
         return try {
-            teams.document(teamId).update(
+            ids.update(teams.document(teamId),
                 mapOf(
                     "status" to status,
                     "rejectReason" to reason,
                     "reviewedBy" to adminUid,
                     "reviewedAt" to FieldValue.serverTimestamp()
                 )
-            ).await()
+            )
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

@@ -79,6 +79,10 @@ fun LineupScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val validationErr by viewModel.validationError.collectAsState()
+    val localTeam by viewModel.localTeam.collectAsState()
+    val visitorTeam by viewModel.visitorTeam.collectAsState()
+    val activeTeamId by viewModel.activeTeamId.collectAsState()
+    val activeTeamName by viewModel.activeTeamName.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedSlotToAssign by remember { mutableStateOf<TacticalPosition?>(null) }
@@ -122,6 +126,23 @@ fun LineupScreen(
             fontWeight = FontWeight.Bold
         )
 
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            localTeam?.let { team ->
+                OutlinedButton(onClick = { viewModel.selectTeam(team, user) }) {
+                    Text(if (activeTeamId == team.id) "✓ Local: ${team.name}" else "Local: ${team.name}")
+                }
+            }
+            visitorTeam?.let { team ->
+                OutlinedButton(onClick = { viewModel.selectTeam(team, user) }) {
+                    Text(if (activeTeamId == team.id) "✓ Visitante: ${team.name}" else "Visitante: ${team.name}")
+                }
+            }
+        }
+        if (visitorTeam == null) {
+            Text("El equipo rival no está registrado; solo se puede configurar la alineación local.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        }
+        Text("Alineación de $activeTeamName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
         // Selector de Formación táctica
         val availableFormations = TacticalFormations.forModality(m.modality)
         if (isEditable) {
@@ -148,7 +169,7 @@ fun LineupScreen(
             )
         }
 
-        SectionTitle("Campo Táctico - Titulares (${positions.count { it.playerId != null }}/${m.modality})")
+        SectionTitle("Campo Táctico - Titulares (${positions.count { it.playerId != null }}/${positions.size})")
 
         // Campo Gráfico de Fútbol (Cancha)
         SoccerPitch(

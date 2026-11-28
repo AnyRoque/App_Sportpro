@@ -20,6 +20,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -59,6 +61,9 @@ fun CallUpFormScreen(
     val error by viewModel.error.collectAsState()
     val deadlineErr by viewModel.deadlineError.collectAsState()
     val minPlayersErr by viewModel.minPlayersError.collectAsState()
+    val playerSearch by viewModel.playerSearch.collectAsState()
+    val externalEmail by viewModel.externalPlayerEmail.collectAsState()
+    val invitedExternalPlayers by viewModel.invitedExternalPlayers.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -121,6 +126,28 @@ fun CallUpFormScreen(
             )
         }
 
+        OutlinedTextField(
+            value = playerSearch,
+            onValueChange = { viewModel.playerSearch.value = it },
+            label = { Text("Buscar por nombre") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        if (isAdding) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = externalEmail,
+                    onValueChange = { viewModel.externalPlayerEmail.value = it },
+                    label = { Text("Correo de jugador registrado") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Email)
+                )
+                OutlinedButton(onClick = { viewModel.addRegisteredPlayerByEmail() }) { Text("Agregar") }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -135,6 +162,10 @@ fun CallUpFormScreen(
             }
         }
 
+        invitedExternalPlayers.forEach { invited ->
+            Text("Invitado: ${invited.fullName} (${invited.email})", style = MaterialTheme.typography.bodySmall)
+        }
+
         minPlayersErr?.let {
             Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
@@ -145,7 +176,9 @@ fun CallUpFormScreen(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(availablePlayers, key = { it.id }) { player ->
+            items(availablePlayers.filter { player ->
+                player.fullName.contains(playerSearch.trim(), ignoreCase = true) || player.email.contains(playerSearch.trim(), ignoreCase = true)
+            }, key = { it.id }) { player ->
                 val isSelected = selectedPlayerIds.contains(player.id)
                 PlayerSelectItemCard(
                     player = player,

@@ -56,7 +56,8 @@ class PlayerFormViewModel : ViewModel() {
         viewModelScope.launch {
             team = TeamRepository.getTeam(teamId).getOrNull()
             val teamPlayers = PlayerRepository.observePlayersByTeam(teamId, dtUid).first()
-            original = playerId?.let { id -> teamPlayers.firstOrNull { it.id == id } }
+            val foundPlayer = playerId?.let { id -> teamPlayers.firstOrNull { it.id == id } }
+            original = foundPlayer?.let { PlayerRepository.getPlayer(it.id).getOrNull() ?: it }
             usedNumbers = teamPlayers.filter { it.id != playerId && it.active }.mapNotNull { it.shirtNumber }.toSet()
 
             val p = original

@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.CallUpItemModel
 import pe.edu.esan.sportpro.data.model.CallUpStatus
+import pe.edu.esan.sportpro.data.model.LinkStatus
 import pe.edu.esan.sportpro.data.model.MatchModel
 import pe.edu.esan.sportpro.data.model.PlayerModel
 import pe.edu.esan.sportpro.data.model.Role
@@ -15,6 +16,7 @@ import pe.edu.esan.sportpro.data.model.UserModel
 import pe.edu.esan.sportpro.data.remote.AttendanceRepository
 import pe.edu.esan.sportpro.data.remote.MatchRepository
 import pe.edu.esan.sportpro.data.remote.PlayerRepository
+import pe.edu.esan.sportpro.data.remote.TeamRepository
 import pe.edu.esan.sportpro.util.Validators
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -30,6 +32,7 @@ class CallUpViewModel : ViewModel() {
 
     private val _activePlayers = MutableStateFlow<List<PlayerModel>>(emptyList())
     val activePlayers: StateFlow<List<PlayerModel>> = _activePlayers.asStateFlow()
+    private val callUpTeamId = MutableStateFlow("")
 
     private val _callUpItems = MutableStateFlow<List<CallUpItemModel>>(emptyList())
     val callUpItems: StateFlow<List<CallUpItemModel>> = _callUpItems.asStateFlow()
@@ -44,6 +47,10 @@ class CallUpViewModel : ViewModel() {
     val minPlayersError = MutableStateFlow<String?>(null)
 
     val selectedPlayerIds = MutableStateFlow<Set<String>>(emptySet())
+    val playerSearch = MutableStateFlow("")
+    val externalPlayerEmail = MutableStateFlow("")
+    private val externalPlayers = MutableStateFlow<List<PlayerModel>>(emptyList())
+    val invitedExternalPlayers: StateFlow<List<PlayerModel>> = externalPlayers.asStateFlow()
     val deadlineDate = MutableStateFlow("")
     val deadlineTime = MutableStateFlow("20:00")
 
@@ -72,10 +79,15 @@ class CallUpViewModel : ViewModel() {
                     deadlineDate.value = m.date
                 }
 
-                val dtUidToQuery = m.dtUid.ifBlank { currentUid }
+                val rivalTeam = TeamRepository.getApprovedTeams().getOrNull()
+                    ?.firstOrNull { it.name.trim().equals(m.rival.trim(), ignoreCase = true) }
+                val callUpTeam = rivalTeam?.takeIf { it.dtUid == currentUid }
+                val teamId = callUpTeam?.id?.takeIf { it.isNotBlank() } ?: m.teamId
+                val teamDtUid = callUpTeam?.dtUid?.takeIf { it.isNotBlank() } ?: m.dtUid.ifBlank { currentUid }
+                callUpTeamId.value = teamId
                 viewModelScope.launch {
-                    PlayerRepository.observePlayersByTeam(m.teamId, dtUidToQuery).collect { playersList ->
-                        val activeList = playersList.filter { it.active }
+                    PlayerRepository.observePlayersByTeam(teamId, teamDtUid).collect { playersList ->
+                        val activeList = playersList.filter { it.active && it.linkStatus == LinkStatus.ACCEPTED }
                         _activePlayers.value = activeList
                     }
                 }
@@ -170,7 +182,9 @@ class CallUpViewModel : ViewModel() {
     fun createCallUp(onDone: () -> Unit) {
         if (!validateCallUp()) return
         val m = _match.value ?: return
-        val selectedPlayersList = _activePlayers.value.filter { selectedPlayerIds.value.contains(it.id) }
+        val selectedPlayersList = _activePlayers.value
+            .filter { selectedPlayerIds.value.contains(it.id) }
+            .map { it.copy(teamId = callUpTeamId.value.ifBlank { m.teamId }) }
 
         viewModelScope.launch {
             _isLoading.value = true
@@ -192,8 +206,12 @@ class CallUpViewModel : ViewModel() {
     fun addPlayersToCallUp(onDone: () -> Unit) {
         val m = _match.value ?: return
         val existingIds = _callUpItems.value.map { it.playerId }.toSet()
-        val additionalPlayers = _activePlayers.value
-            .filter { selectedPlayerIds.value.contains(it.id) && !existingIds.contains(it.id) }
+        val teamId = callUpTeamId.value.ifBlank { m.teamId }
+        val additionalPlayers = (
+            _activePlayers.value.filter { selectedPlayerIds.value.contains(it.id) } + externalPlayers.value
+        ).distinctBy { it.id }
+            .filter { !existingIds.contains(it.id) }
+            .map { it.copy(teamId = teamId) }
 
         if (additionalPlayers.isEmpty()) {
             _error.value = "Selecciona al menos un jugador nuevo para agregar"
@@ -206,9 +224,42 @@ class CallUpViewModel : ViewModel() {
             _isLoading.value = false
             result.onSuccess {
                 selectedPlayerIds.value = emptySet()
+                externalPlayers.value = emptyList()
+                externalPlayerEmail.value = ""
                 onDone()
             }.onFailure { e ->
                 _error.value = e.message
+            }
+        }
+    }
+
+    fun addRegisteredPlayerByEmail() {
+        val email = externalPlayerEmail.value.trim().lowercase()
+        if (email.isBlank()) {
+            _error.value = "Ingresa el correo del jugador"
+            return
+        }
+        viewModelScope.launch {
+            val userResult = PlayerRepository.findRegisteredUserByEmail(email)
+            val user = userResult.getOrNull()
+            if (user == null || user.roleEnum != Role.JUG || !user.active) {
+                _error.value = "No encontramos un jugador activo registrado con ese correo"
+                return@launch
+            }
+            val player = PlayerModel(
+                id = "user_${user.uid}",
+                teamId = callUpTeamId.value,
+                name = user.name,
+                lastName = user.lastName,
+                email = user.email,
+                userUid = user.uid,
+                active = true
+            )
+            if (_callUpItems.value.any { it.playerId == player.id } || externalPlayers.value.any { it.id == player.id }) {
+                _error.value = "Ese jugador ya está agregado a la convocatoria"
+            } else {
+                externalPlayers.value = externalPlayers.value + player
+                externalPlayerEmail.value = ""
             }
         }
     }

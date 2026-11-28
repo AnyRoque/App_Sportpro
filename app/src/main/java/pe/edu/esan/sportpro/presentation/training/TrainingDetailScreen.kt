@@ -68,25 +68,20 @@ fun TrainingDetailScreen(
         result.onSuccess { tr ->
             training = tr
 
-            // Cargar registro de asistencia de la sesión
-            val attRes = AttendanceRepository.getAttendanceRecord(trainingId)
-            attRes.onSuccess { rec ->
-                attendanceRecord = rec
-                // Buscar asistencia del jugador o hijos del padre
-                if (user.roleEnum == Role.JUG) {
-                    val pRes = AttendanceRepository.getPlayerByUserUid(user.uid)
-                    pRes.onSuccess { player ->
-                        val item = rec.items.firstOrNull { it.playerId == player.id }
-                        if (item != null) userAttendanceItems = listOf(item)
-                    }
-                } else if (user.roleEnum == Role.PAD) {
-                    val cRes = AttendanceRepository.getChildrenByParentUid(user.uid)
-                    cRes.onSuccess { children ->
-                        val childIds = children.map { it.id }.toSet()
-                        val items = rec.items.filter { childIds.contains(it.playerId) }
-                        userAttendanceItems = items
+            when (user.roleEnum) {
+                Role.JUG -> {
+                    val player = AttendanceRepository.getPlayerByUserUid(user.uid).getOrNull()
+                    userAttendanceItems = listOfNotNull(player?.let {
+                        AttendanceRepository.getPlayerAttendanceForTraining(trainingId, it).getOrNull()
+                    })
+                }
+                Role.PAD -> {
+                    val players = AttendanceRepository.getChildrenByParentUid(user.uid).getOrNull().orEmpty()
+                    userAttendanceItems = players.mapNotNull {
+                        AttendanceRepository.getPlayerAttendanceForTraining(trainingId, it).getOrNull()
                     }
                 }
+                else -> attendanceRecord = AttendanceRepository.getAttendanceRecord(trainingId).getOrNull()
             }
         }.onFailure { errorMsg = it.message }
     }

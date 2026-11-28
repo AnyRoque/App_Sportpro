@@ -59,7 +59,7 @@ object EventStatus {
  * Modelo para eventos registrados en tiempo real durante un partido (US-19).
  */
 data class MatchEventModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val matchId: String = "",
     val type: String = EventType.GOAL,
     val minute: Int = 1,
@@ -78,4 +78,9 @@ data class MatchEventModel(
     val status: String = EventStatus.ACTIVE,
     val pendingSync: Boolean = false,
     @ServerTimestamp val registeredAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

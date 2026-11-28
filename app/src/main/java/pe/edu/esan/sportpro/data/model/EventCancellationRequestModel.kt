@@ -15,7 +15,7 @@ object RequestStatus {
  * Colección: eventCancellationRequests/{requestId}
  */
 data class EventCancellationRequestModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val matchId: String = "",
     val matchTitle: String = "",
     val eventId: String = "",
@@ -28,4 +28,9 @@ data class EventCancellationRequestModel(
     val adminResponseComment: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val resolvedAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

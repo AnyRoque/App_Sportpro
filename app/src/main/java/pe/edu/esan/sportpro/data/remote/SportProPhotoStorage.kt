@@ -8,6 +8,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import pe.edu.esan.sportpro.BuildConfig
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -48,9 +49,17 @@ object SportProPhotoStorage {
                 else -> error("Selecciona una imagen JPG, PNG o WebP")
             }
             val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-                input.readNBytes(MAX_BYTES + 1)
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    check(output.size() + read <= MAX_BYTES) { "La imagen debe pesar máximo 5 MB" }
+                    output.write(buffer, 0, read)
+                }
+                output.toByteArray()
             } ?: error("No se pudo leer la imagen")
-            check(bytes.isNotEmpty() && bytes.size <= MAX_BYTES) { "La imagen debe pesar máximo 5 MB" }
+            check(bytes.isNotEmpty()) { "La imagen está vacía" }
             val path = "$uid/foto_${System.currentTimeMillis()}.$ext"
             val url = URL("$host/storage/v1/object/$BUCKET/${encodedPath(path)}")
             val conn = (url.openConnection() as HttpURLConnection).apply {

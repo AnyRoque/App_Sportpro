@@ -10,6 +10,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.remote.AttendanceRepository
+import pe.edu.esan.sportpro.data.remote.PlayerRepository
+import com.google.firebase.firestore.SetOptions
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -55,6 +57,7 @@ fun PlayerEditSection(uid: String) {
 
             val jugador = AttendanceRepository
                 .getPlayerByUserUid(uid).getOrNull()
+                ?.let { PlayerRepository.getPlayer(it.id).getOrNull() ?: it }
 
             jugadorId = jugador?.id
             emergencia = jugador?.emergencyName.orEmpty()
@@ -168,7 +171,7 @@ fun PlayerEditSection(uid: String) {
                                         cambios["emergencyPhone"] = telefonoEmergencia
                                     }
 
-                                    batch.update(ref, cambios)
+                                    batch.set(ref.collection("private").document("contact"), cambios, SetOptions.merge())
                                 }
 
                                 batch.commit().await()

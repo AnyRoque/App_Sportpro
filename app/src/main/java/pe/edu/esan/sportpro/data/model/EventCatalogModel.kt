@@ -17,7 +17,7 @@ object AccumulatesStatType {
  * Almacenado en la colección Firestore "event_catalog".
  */
 data class EventCatalogModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val name: String = "", // Nombre único del tipo de evento (ej. "Gol", "Falta")
     val icon: String = "sports_soccer", // Ícono representativo
     val colorHex: String = "#2196F3", // Color en hexadecimal
@@ -29,4 +29,9 @@ data class EventCatalogModel(
     val active: Boolean = true, // Activo / Desactivo
     val isSystemDefault: Boolean = false, // Indica si pertenece a los 13 tipos base
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

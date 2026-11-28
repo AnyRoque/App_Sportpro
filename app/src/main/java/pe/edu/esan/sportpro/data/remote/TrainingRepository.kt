@@ -2,12 +2,22 @@ package pe.edu.esan.sportpro.data.remote
 
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.ExerciseModel
+import pe.edu.esan.sportpro.data.model.LinkStatus
 import pe.edu.esan.sportpro.data.model.NotificationModel
 import pe.edu.esan.sportpro.data.model.ObjectiveType
 import pe.edu.esan.sportpro.data.model.PlayerModel
@@ -30,6 +40,7 @@ object TrainingRepository {
     private const val NOTIFICATIONS = "notifications"
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val trainings get() = firestore.collection(TRAININGS)
     private val teams get() = firestore.collection(TEAMS)
     private val players get() = firestore.collection(PLAYERS)
@@ -107,13 +118,14 @@ object TrainingRepository {
      */
     suspend fun createTraining(training: TrainingModel): Result<String> {
         return try {
-            val docRef = trainings.document()
             val toSave = training.copy(
-                id = docRef.id,
                 status = TrainingStatus.PROGRAMMED,
                 cancelReason = ""
             )
-            docRef.set(toSave).await()
+            val docRef = ids.create(trainings, SportProEntity.TRAINING, toSave.firestoreFields()) { tx, _ ->
+                requireTeam(tx, teams, training.teamId, training.dtUid)
+                ({})
+            }
 
             // Disparar notificaciones a jugadores y padres vinculados al equipo
             dispatchTrainingNotifications(
@@ -134,7 +146,8 @@ object TrainingRepository {
      */
     suspend fun updateTraining(training: TrainingModel): Result<Unit> {
         return try {
-            trainings.document(training.id).set(training).await()
+            val fields = training.firestoreFields() - setOf("createdAt", "status", "cancelReason", "duplicatedFromId")
+            ids.update(trainings.document(training.id), fields)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -151,12 +164,13 @@ object TrainingRepository {
 
             if (training.dtUid != dtUid) throw Exception("No tienes permiso para cancelar esta sesión")
 
-            trainings.document(trainingId).update(
+            ids.update(trainings.document(trainingId),
                 mapOf(
                     "status" to TrainingStatus.CANCELED,
                     "cancelReason" to reason.trim()
-                )
-            ).await()
+                ),
+                "DEACTIVATE"
+            )
 
             dispatchTrainingNotifications(
                 teamId = training.teamId,
@@ -176,7 +190,24 @@ object TrainingRepository {
      */
     suspend fun getTraining(trainingId: String): Result<TrainingModel> {
         return try {
-            val doc = trainings.document(trainingId).get().await()
+            val ref = trainings.document(trainingId)
+            val doc = try {
+                ref.get().await()
+            } catch (error: FirebaseFirestoreException) {
+                if (error.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) throw error
+                val user = FirebaseAuthManager.getUserProfile().getOrThrow()
+                val field = when (user.roleEnum) {
+                    Role.JUG -> "userUid"
+                    Role.PAD -> "parentUid"
+                    else -> throw error
+                }
+                val roster = players.whereEqualTo(field, user.uid).get().await()
+                    .toObjects(PlayerModel::class.java)
+                val links = eligibleMemberships(roster)
+                if (links.isEmpty()) throw error
+                syncMemberships(user.uid, links)
+                ref.get().await()
+            }
             val model = doc.toObject(TrainingModel::class.java) ?: throw Exception("Sesión no encontrada")
             Result.success(model)
         } catch (e: Exception) {
@@ -199,73 +230,41 @@ object TrainingRepository {
     /**
      * Observa las sesiones según el rol del usuario (DT, JUG o PAD).
      */
-    fun observeTrainingsForUser(user: UserModel): Flow<List<TrainingModel>> = callbackFlow {
-        if (user.roleEnum == Role.DT) {
-            val registration = trainings.whereEqualTo("dtUid", user.uid)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        close(error)
-                        return@addSnapshotListener
-                    }
-                    val list = snapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                    trySend(list)
-                }
-            awaitClose { registration.remove() }
-        } else if (user.roleEnum == Role.PAD) {
-            val playerQuery = players.whereEqualTo("parentUid", user.uid)
-            val registration = playerQuery.addSnapshotListener { pSnapshot, pError ->
-                if (pError != null) {
-                    close(pError)
-                    return@addSnapshotListener
-                }
-                val teamIds = pSnapshot?.toObjects(PlayerModel::class.java).orEmpty()
-                    .map { it.teamId }
-                    .filter { it.isNotBlank() }
-                    .distinct()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeTrainingsForUser(user: UserModel): Flow<List<TrainingModel>> {
+        val memberships = when (user.roleEnum) {
+            Role.DT -> return observeTrainingsByDt(user.uid)
+            Role.ADM -> return observe(trainings)
+            Role.PAD -> PlayerRepository.observeChildrenByParent(user.uid)
+            Role.JUG -> PlayerRepository.observePlayersByUser(user.uid)
+            null -> return flowOf(emptyList())
+        }
 
-                if (teamIds.isEmpty()) {
-                    trySend(emptyList())
-                } else {
-                    trainings.whereIn("teamId", teamIds.take(10))
-                        .addSnapshotListener { tSnapshot, tError ->
-                            if (tError != null) {
-                                close(tError)
-                                return@addSnapshotListener
-                            }
-                            val list = tSnapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                            trySend(list)
-                        }
+        return memberships.map(::eligibleMemberships).distinctUntilChanged().flatMapLatest { links ->
+            if (links.isEmpty()) {
+                flowOf(emptyList())
+            } else {
+                flow {
+                    syncMemberships(user.uid, links)
+                    emitAll(combine(links.keys.map(::observeTrainingsByTeam)) { sessions ->
+                        sessions.flatMap { it }.distinctBy { it.id }
+                    })
                 }
             }
-            awaitClose { registration.remove() }
-        } else {
-            // JUG
-            val playerQuery = players.whereEqualTo("userUid", user.uid)
-            val registration = playerQuery.addSnapshotListener { pSnapshot, pError ->
-                if (pError != null) {
-                    close(pError)
-                    return@addSnapshotListener
-                }
-                val teamIds = pSnapshot?.toObjects(PlayerModel::class.java).orEmpty()
-                    .map { it.teamId }
-                    .filter { it.isNotBlank() }
-                    .distinct()
+        }
+    }
 
-                if (teamIds.isEmpty()) {
-                    trySend(emptyList())
-                } else {
-                    trainings.whereIn("teamId", teamIds.take(10))
-                        .addSnapshotListener { tSnapshot, tError ->
-                            if (tError != null) {
-                                close(tError)
-                                return@addSnapshotListener
-                            }
-                            val list = tSnapshot?.toObjects(TrainingModel::class.java).orEmpty()
-                            trySend(list)
-                        }
-                }
+    private fun eligibleMemberships(roster: List<PlayerModel>): Map<String, String> =
+        roster.filter { it.active && it.linkStatus == LinkStatus.ACCEPTED && it.teamId.isNotBlank() }
+            .groupBy { it.teamId }
+            .mapValues { (_, entries) -> entries.minOf { it.id } }
+
+    private suspend fun syncMemberships(uid: String, links: Map<String, String>) {
+        for ((teamId, playerId) in links) {
+            val ref = teams.document(teamId).collection("members").document(uid)
+            if (ref.get().await().getString("playerId") != playerId) {
+                ref.set(mapOf("playerId" to playerId)).await()
             }
-            awaitClose { registration.remove() }
         }
     }
 
@@ -311,7 +310,7 @@ object TrainingRepository {
                     "read" to false,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
-                notifications.add(notif)
+                notifications.notifyBestEffort(notif)
             }
         } catch (_: Exception) {
             // Ignorar fallos secundarios en notificaciones

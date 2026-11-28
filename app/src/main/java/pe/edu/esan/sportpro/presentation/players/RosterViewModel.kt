@@ -14,6 +14,7 @@ import pe.edu.esan.sportpro.data.model.PlayerModel
 import pe.edu.esan.sportpro.data.model.TeamModel
 import pe.edu.esan.sportpro.data.remote.PlayerRepository
 import pe.edu.esan.sportpro.data.remote.TeamRepository
+import pe.edu.esan.sportpro.util.Validators
 
 data class RosterState(
     val loading: Boolean = true,
@@ -25,9 +26,15 @@ data class RosterState(
 ) {
     /** Plantel: jugadores con vínculo aceptado, filtrados por búsqueda y posición. */
     val roster: List<PlayerModel>
-        get() = all.filter { it.linkStatus == LinkStatus.ACCEPTED }
+        get() = all.asSequence()
+            .filter { it.linkStatus == LinkStatus.ACCEPTED }
+            .sortedWith(compareByDescending<PlayerModel> { it.active }.thenBy { it.createdAt?.seconds ?: Long.MAX_VALUE })
+            .distinctBy {
+                Validators.normalize(it.fullName).ifBlank { "player:${it.id}" }
+            }
             .filter { query.isBlank() || it.fullName.contains(query.trim(), ignoreCase = true) }
             .filter { positionFilter == "Todas" || it.position == positionFilter }
+            .toList()
 
     /** Solicitudes de vínculo enviadas por padres (US-02). */
     val requests: List<PlayerModel>

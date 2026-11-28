@@ -1,6 +1,9 @@
 package pe.edu.esan.sportpro
 
 import android.app.Application
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.PersistentCacheSettings
@@ -13,6 +16,11 @@ class SportProApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        if (BuildConfig.USE_FIREBASE_EMULATOR) {
+            configureFirebaseEmulator()
+            return
+        }
 
         try {
             // Configurar almacenamiento en memoria/caché local ilimitada para lectura/escritura sin conexión
@@ -27,6 +35,23 @@ class SportProApp : Application() {
             FirebaseFirestore.getInstance().firestoreSettings = settings
         } catch (_: Exception) {
             // Firestore ya inicializado por el SDK
+        }
+    }
+
+    private fun configureFirebaseEmulator() {
+        FirebaseApp.getApps(this).firstOrNull { it.name == FirebaseApp.DEFAULT_APP_NAME }?.delete()
+        val options = FirebaseOptions.Builder()
+            .setProjectId("demo-sportpro")
+            .setApplicationId("1:111111111111:android:1111111111111111")
+            .setApiKey("fake-api-key")
+            .build()
+        val app = FirebaseApp.initializeApp(this, options)
+        FirebaseAuth.getInstance(app).useEmulator("10.0.2.2", 9099)
+        FirebaseFirestore.getInstance(app).apply {
+            firestoreSettings = FirebaseFirestoreSettings.Builder()
+                .setLocalCacheSettings(com.google.firebase.firestore.MemoryCacheSettings.newBuilder().build())
+                .build()
+            useEmulator("10.0.2.2", 8080)
         }
     }
 }

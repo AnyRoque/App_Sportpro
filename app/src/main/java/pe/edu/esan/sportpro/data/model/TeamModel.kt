@@ -6,7 +6,7 @@ import com.google.firebase.firestore.ServerTimestamp
 
 /** Documento teams/{teamId} (US-03 / US-07) */
 data class TeamModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val name: String = "",
     /** nombre normalizado + categoría, usado para evitar duplicados */
     val nameKey: String = "",
@@ -22,4 +22,9 @@ data class TeamModel(
     val reviewedBy: String = "",
     val reviewedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

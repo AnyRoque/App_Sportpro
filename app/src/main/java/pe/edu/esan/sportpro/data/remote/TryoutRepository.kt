@@ -25,6 +25,7 @@ object TryoutRepository {
     private const val TRYOUT_REPORTS = "tryoutReports"
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val tryoutsCollection get() = firestore.collection(TRYOUTS)
 
     /**
@@ -106,9 +107,11 @@ object TryoutRepository {
                 return Result.failure(Exception("Las convocatorias son gratuitas. Queda prohibida cualquier solicitud de pago."))
             }
 
-            val docRef = tryoutsCollection.document()
-            val tryoutToSave = tryout.copy(id = docRef.id, isFree = true, verifiedTeam = true)
-            docRef.set(tryoutToSave).await()
+            val tryoutToSave = tryout.copy(isFree = true, verifiedTeam = true)
+            val docRef = ids.create(tryoutsCollection, SportProEntity.TRYOUT, tryoutToSave.firestoreFields()) { tx, _ ->
+                requireTeam(tx, firestore.collection(TEAMS), tryout.teamId, tryout.dtUid)
+                ({})
+            }
             Result.success(docRef.id)
         } catch (e: Exception) {
             Result.failure(e)
@@ -125,7 +128,7 @@ object TryoutRepository {
                 return Result.failure(Exception("La fecha de la prueba no puede ser anterior a la fecha actual."))
             }
 
-            tryoutsCollection.document(tryout.id).set(tryout).await()
+            ids.update(tryoutsCollection.document(tryout.id), tryout.firestoreFields() - "createdAt" - "interestedCount")
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -176,17 +179,23 @@ object TryoutRepository {
                 }
             }
 
-            val existingByName = candidatesRef.whereEqualTo("name", candidate.name.trim()).get().await()
-            if (!existingByName.isEmpty) {
-                return Result.failure(Exception("Ya existe una inscripción registrada a nombre de ${candidate.name.trim()}."))
+            check(candidate.userUid == FirebaseAuthManager.currentUid && candidate.userUid.isNotBlank()) {
+                "Debes iniciar sesión para inscribirte"
             }
-
-            val docRef = candidatesRef.document()
-            val candidateToSave = candidate.copy(id = docRef.id)
-            docRef.set(candidateToSave).await()
-
-            // Incrementar contador de interesados
-            tryoutsCollection.document(candidate.tryoutId).update("interestedCount", FieldValue.increment(1)).await()
+            ids.create(candidatesRef, SportProEntity.CANDIDATE, candidate.firestoreFields()) { tx, ref ->
+                val parent = tryoutsCollection.document(candidate.tryoutId)
+                val owner = parent.collection("candidateOwners").document(candidate.userUid)
+                check(!tx.get(owner).exists()) { "Ya te has inscrito en esta convocatoria" }
+                val current = tx.get(parent)
+                check(current.exists()) { "La convocatoria ya no está disponible" }
+                val capacity = current.getLong("slots") ?: 0L
+                val count = current.getLong("interestedCount") ?: 0L
+                check(capacity == 0L || count < capacity) { "Los cupos para esta convocatoria ya se encuentran agotados" }
+                ({
+                    tx.set(owner, mapOf("candidateId" to ref.id))
+                    tx.update(parent, "interestedCount", count + 1)
+                })
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -233,7 +242,16 @@ object TryoutRepository {
                 "status" to "PENDIENTE",
                 "createdAt" to FieldValue.serverTimestamp()
             )
-            firestore.collection(TRYOUT_REPORTS).document("${tryoutId}_$reporterUid").set(reportData).await()
+            val reports = firestore.collection(TRYOUT_REPORTS)
+            val parent = tryoutsCollection.document(tryoutId)
+            val owner = parent.collection("reportOwners").document(reporterUid)
+            ids.create(reports, SportProEntity.REPORT, reportData) { tx, ref ->
+                check(tx.get(parent).exists()) { "La convocatoria ya no está disponible" }
+                check(!tx.get(owner).exists() && !tx.get(reports.document("${tryoutId}_$reporterUid")).exists()) {
+                    "Ya reportaste esta convocatoria"
+                }
+                ({ tx.set(owner, mapOf("reportId" to ref.id)) })
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

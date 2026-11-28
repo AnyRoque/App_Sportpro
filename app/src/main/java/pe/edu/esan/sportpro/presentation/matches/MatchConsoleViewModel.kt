@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.CallUpItemModel
 import pe.edu.esan.sportpro.data.model.CallUpStatus
@@ -96,7 +97,9 @@ class MatchConsoleViewModel : ViewModel() {
 
                 // Cargar alineación inicial
                 viewModelScope.launch {
-                    MatchRepository.observeLineup(matchId).collect { savedLineup ->
+                    MatchRepository.observeLineup(matchId, m.teamId)
+                        .onStart { emit(MatchRepository.getLineup(matchId, "starting").getOrNull()) }
+                        .collect { savedLineup ->
                         if (savedLineup == null || savedLineup.positions.isEmpty()) {
                             noLineupError.value = true
                         } else {

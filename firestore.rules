@@ -6,41 +6,213 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() { return request.auth != null; }
-    function myDoc() { return /databases/$(database)/documents/users/$(request.auth.uid); }
-    function role() { return exists(myDoc()) ? get(myDoc()).data.role : ''; }
+    function myDoc() { return docPath('users/' + me()); }
+    function role() { return exists(myDoc()) && get(myDoc()).data.get('active', true) == true ? get(myDoc()).data.role : ''; }
     function isAdmin() { return signedIn() && role() == 'ADM'; }
     function isDt() { return signedIn() && role() == 'DT'; }
     function me() { return request.auth.uid; }
+    function staff() { return isAdmin() || isDt(); }
+    function linkedPlayer(d) {
+      return d.get('userUid', '') == me() || d.get('parentUid', '') == me();
+    }
+    function privatePlayer(d) {
+      return isAdmin() || (isDt() && d.dtUid == me()) || linkedPlayer(d);
+    }
+    function playerContactFields() {
+      return ['dni', 'birthDate', 'phone', 'email', 'heightCm', 'weightKg',
+              'emergencyName', 'emergencyRelation', 'emergencyPhone', 'parentRelation'];
+    }
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    function counter(key) { return docPath('counters/' + key); }
+    function docPath(relative) { return path('/databases/' + database + '/documents/' + relative); }
+    function allocation(key, prefix, id, relative) {
+      let before = get(counter(key)).data;
+      let after = getAfter(counter(key)).data;
+      return id is string && id.matches('SP-' + prefix + '-[0-9]{6}')
+        && after.lastId == before.lastId + 1
+        && after.allocatedId == id && after.documentPath == relative
+        && int(id.split('-')[2]) == after.lastId;
+    }
+    function record(key, prefix, id, relative) {
+      let d = request.resource.data;
+      return d.id == id && d.createdAt == request.time && d.updatedAt == request.time
+        && d.createdByUid == me() && d.updatedByUid == me()
+        && allocation(key, prefix, id, relative);
+    }
+    function stable() {
+      return !changed().hasAny(['id', 'authUid', 'createdAt', 'createdByUid', 'createdBy']);
+    }
+    function teamOwned(id, uid) {
+      let d = get(/databases/$(database)/documents/teams/$(id)).data;
+      return d.dtUid == uid && d.status == 'APROBADO';
+    }
+
+    function counterPrefix(key) {
+      return {
+        'admins': 'ADM',
+        'directors': 'DT',
+        'users': 'USU',
+        'players': 'JUG',
+        'teams': 'EQU',
+        'matches': 'PAR',
+        'trainings': 'ENT',
+        'attendance': 'ASI',
+        'monthlyFees': 'CUO',
+        'events': 'EVT',
+        'goals': 'GOL',
+        'cards': 'TAR',
+        'substitutions': 'SUS',
+        'tryouts': 'PRU',
+        'candidates': 'POS',
+        'announcements': 'ANU',
+        'posts': 'PUB',
+        'comments': 'COM',
+        'notifications': 'NOT',
+        'eventCatalog': 'CAT',
+        'eventCancellations': 'SOL',
+        'eventHistory': 'HIS',
+        'auditLogs': 'AUD',
+        'callups': 'CON',
+        'lineups': 'ALI',
+        'reports': 'REP',
+        'summaries': 'RES'
+      }.get(key, '');
+    }
+    match /counters/{key} {
+      allow get: if signedIn();
+      allow update: if signedIn()
+        && request.resource.data.keys().hasOnly(['lastId', 'documentPath', 'allocatedId'])
+        && request.resource.data.lastId is int
+        && (request.resource.data.lastId == resource.data.lastId + 1
+            || (key == 'callups' && request.resource.data.lastId > resource.data.lastId
+                && request.resource.data.lastId - resource.data.lastId <= 100))
+        && request.resource.data.lastId > 0 && request.resource.data.lastId <= 999999
+        && counterPrefix(key) != ''
+        && request.resource.data.allocatedId.matches('SP-' + counterPrefix(key) + '-[0-9]{6}')
+        && int(request.resource.data.allocatedId.split('-')[2]) == request.resource.data.lastId
+        && request.resource.data.documentPath.matches(
+          '(Admins|users|teams|players|matches|trainings|attendance|announcements|posts|notifications|tryouts|event_catalog|eventCancellationRequests|auditLogs|feeIndex|reports|tryoutReports|summaries)/[^/]+|(matches/[^/]+/callups|matches/[^/]+/lineup|matches/[^/]+/events|posts/[^/]+/comments|tryouts/[^/]+/candidates|matches/[^/]+/events/[^/]+/history)/[^/]+')
+        && (key != 'callups' || validCallUpCounter(request.resource.data.documentPath,
+              request.resource.data.lastId - resource.data.lastId))
+        && !exists(docPath(request.resource.data.documentPath))
+        && getAfter(docPath(request.resource.data.documentPath)).data.id == request.resource.data.allocatedId;
+    }
+
+    function validCallUpCounter(relative, count) {
+      let parts = relative.split('/');
+      let parent = docPath('matches/' + parts[1]);
+      let delta = getAfter(parent).data.get('callupIds', {}).diff(get(parent).data.get('callupIds', {}));
+      return parts.size() == 4 && parts[0] == 'matches' && parts[2] == 'callups'
+        && isMatchStaff(parts[1]) && delta.addedKeys().size() == count
+        && delta.removedKeys().size() == 0 && delta.changedKeys().size() == 0;
+    }
+    function validCallUp(id, matchId) {
+      let d = request.resource.data;
+      let before = get(counter('callups')).data;
+      let after = getAfter(counter('callups')).data;
+      let parent = getAfter(/databases/$(database)/documents/matches/$(matchId)).data;
+      return id.matches('SP-CON-[0-9]{6}') && d.id == id && d.matchId == matchId
+        && after.documentPath.matches('matches/' + matchId + '/callups/SP-CON-[0-9]{6}')
+        && int(id.split('-')[2]) > before.lastId && int(id.split('-')[2]) <= after.lastId
+        && d.createdAt == request.time && d.updatedAt == request.time
+        && d.createdByUid == me() && d.updatedByUid == me()
+        && parent.callupIds[d.playerId] == id
+        && !matchData(matchId).get('callupIds', {}).keys().hasAny([d.playerId]);
+    }
+    function validSummaryLink(matchId) {
+      let id = request.resource.data.summaryId;
+      let summary = getAfter(/databases/$(database)/documents/summaries/$(id)).data;
+      return !resource.data.keys().hasAny(['summaryId']) && summary.matchId == matchId
+        && summary.createdByUid == me() && summary.createdAt == request.time;
+    }
+    function validLineupLink(matchId) {
+      let d = request.resource.data;
+      let key = d.lastLineupTeam;
+      let id = d.lineupIds[key];
+      let delta = d.lineupIds.diff(resource.data.get('lineupIds', {}));
+      let lineup = getAfter(/databases/$(database)/documents/matches/$(matchId)/lineup/$(id)).data;
+      return delta.addedKeys().hasOnly([key]) && delta.addedKeys().size() == 1
+        && delta.removedKeys().size() == 0 && delta.changedKeys().size() == 0
+        && lineup.createdAt == request.time && lineup.createdByUid == me();
+    }
+
+    function validAudit(id) {
+      let d = request.resource.data;
+      let target = docPath(d.documentPath);
+      return d.keys().hasOnly(['id', 'operation', 'collection', 'documentId', 'documentPath',
+                               'performedBy', 'performedByUid', 'changedFields', 'timestamp'])
+        && d.id == id && d.performedByUid == me() && d.timestamp == request.time
+        && d.performedBy == getAfter(myDoc()).data.get('id', '')
+        && d.documentPath.matches('([^/]+/)*' + d.collection + '/' + d.documentId)
+        && d.changedFields is list && d.changedFields.size() <= 60
+        && allocation('auditLogs', 'AUD', id, 'auditLogs/' + id)
+        && ((d.operation == 'CREATE' && !exists(target) && d.changedFields.size() == 0
+             && getAfter(target).data.createdAt == request.time && getAfter(target).data.createdByUid == me())
+            || (d.operation in ['UPDATE', 'DEACTIVATE'] && exists(target)
+                && getAfter(target).data.updatedAt == request.time && getAfter(target).data.updatedByUid == me()
+                && getAfter(target).data.diff(get(target).data).affectedKeys().hasAll(d.changedFields)));
+    }
+    match /auditLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && validAudit(id);
+    }
+    function validProfile(uid) {
+      let d = request.resource.data;
+      return d.authUid == uid && d.uid == uid && d.active == true
+        && d.createdAt == request.time && d.updatedAt == request.time
+        && d.createdByUid == me() && d.updatedByUid == me()
+        && ((d.role == 'DT' && allocation('directors', 'DT', d.id, 'users/' + uid))
+          || (d.role in ['JUG', 'PAD'] && allocation('users', 'USU', d.id, 'users/' + uid))
+          || (d.role == 'ADM' && isAdmin() && allocation('admins', 'ADM', d.id, 'Admins/' + d.id)
+              && getAfter(/databases/$(database)/documents/Admins/$(d.id)).data.authUid == uid));
+    }
 
     // Partido: DT dueño, operador asignado, DT miembro del partido o ADM (US-16 a US-21)
     function matchData(matchId) { return get(/databases/$(database)/documents/matches/$(matchId)).data; }
     function isMatchStaffOf(m) {
-      return m.get('dtUid', '') == me()
-        || m.get('operatorUid', '') == me()
-        || (me() in m.get('memberUids', []) && isDt())
-        || isAdmin();
+      return isAdmin()
+        || (isDt() && (m.get('dtUid', '') == me() || me() in m.get('memberUids', [])))
+        || (role() in ['DT', 'JUG', 'PAD'] && m.get('operatorUid', '') == me());
     }
     function isMatchStaff(matchId) { return signedIn() && isMatchStaffOf(matchData(matchId)); }
+    function canReadMatch(m) {
+      return signedIn() && (staff() ||
+        (role() in ['JUG', 'PAD'] && me() in m.memberUids));
+    }
+    function validMatchTeam(d) {
+      let rivalId = d.get('rivalTeamId', '');
+      return rivalId is string && (rivalId == '' ||
+        (rivalId != d.teamId && get(docPath('teams/' + rivalId)).data.status == 'APROBADO'));
+    }
+    function validMatchOperator(d) {
+      let operator = d.get('operatorUid', '');
+      return operator == '' || operator == d.dtUid || operator in d.get('memberUids', []);
+    }
+    function validRosterTeam(d) {
+      return d.teamId == '' || get(docPath('teams/' + d.teamId)).data.dtUid == d.dtUid;
+    }
 
     // ---------- Usuarios (US-01, US-06) ----------
     match /users/{uid} {
-      allow read: if signedIn();
+      allow get: if signedIn() && (uid == me() || staff());
+      allow list: if staff();
       // Registro público: solo DT, JUG o PAD. El ADM solo lo crea otro ADM (US-06).
-      allow create: if (signedIn() && request.auth.uid == uid
-                        && request.resource.data.role in ['DT', 'JUG', 'PAD'])
-                    || isAdmin();
+      allow create: if signedIn() && validProfile(uid)
+        && ((me() == uid && request.resource.data.role in ['DT', 'JUG', 'PAD']) || isAdmin());
       // Nadie puede cambiar su propio rol ni reactivarse
-      allow update: if (signedIn() && request.auth.uid == uid
-                        && request.resource.data.role == resource.data.role
-                        && request.resource.data.active == resource.data.active)
-                    || isAdmin();
+      allow update: if stable() && !changed().hasAny(['uid'])
+        && (isAdmin() || (signedIn() && me() == uid
+          && !changed().hasAny(['role', 'active'])));
       allow delete: if false;
     }
 
     // ---------- Administradores (US-06): solo ADM ----------
     match /Admins/{adminId} {
-      allow read, write: if isAdmin();
+      allow read: if isAdmin();
+      allow create: if isAdmin() && record('admins', 'ADM', adminId, 'Admins/' + adminId)
+        && request.resource.data.role == 'ADM';
+      allow update: if isAdmin() && stable() && !changed().hasAny(['role']);
     }
 
     // ---------- Equipos (US-03, US-07) ----------
@@ -48,45 +220,115 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if isDt()
                     && request.resource.data.dtUid == request.auth.uid
-                    && request.resource.data.status == 'PENDIENTE';
+                    && request.resource.data.status == 'PENDIENTE'
+        && record('teams', 'EQU', teamId, 'teams/' + teamId);
       // El DT edita su equipo sin poder aprobarlo; el ADM aprueba o rechaza
-      allow update: if isAdmin()
-                    || (isDt() && resource.data.dtUid == request.auth.uid
+      allow update: if stable() && (isAdmin()
+                    || (isDt() && !changed().hasAny(['dtUid']) && resource.data.dtUid == request.auth.uid
                         && (request.resource.data.status == resource.data.status
-                            || request.resource.data.status == 'PENDIENTE'));
-      allow delete: if isAdmin();
+                            || request.resource.data.status == 'PENDIENTE')));
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow get: if signedIn() && (uid == me() || isAdmin());
+        allow create, update: if signedIn() && uid == me() && role() in ['JUG', 'PAD']
+          && request.resource.data.keys().hasOnly(['playerId'])
+          && validMembership(teamId, request.resource.data.playerId);
+      }
+    }
+
+    function validMembership(teamId, playerId) {
+      let player = get(docPath('players/' + playerId)).data;
+      return player.teamId == teamId && player.linkStatus == 'ACEPTADO'
+        && player.active == true && linkedPlayer(player);
+    }
+    function isTeamMember(teamId) {
+      let membership = get(docPath('teams/' + teamId + '/members/' + me())).data;
+      return validMembership(teamId, membership.playerId);
     }
 
     // ---------- Partidos y eventos en vivo (US-16 a US-21) ----------
     match /matches/{matchId} {
-      allow read: if signedIn();
+      allow read: if canReadMatch(resource.data);
       // Solo el DT programa sus partidos; marcador, cronómetro y estado los cambia el equipo técnico
-      allow create: if isDt() && request.resource.data.dtUid == me();
-      allow update: if signedIn() && isMatchStaffOf(resource.data);
+      allow create: if isDt() && request.resource.data.dtUid == me()
+        && record('matches', 'PAR', matchId, 'matches/' + matchId) && teamOwned(request.resource.data.teamId, me())
+        && request.resource.data.status == 'PROGRAMADO'
+        && validMatchTeam(request.resource.data)
+        && validMatchOperator(request.resource.data)
+        && !request.resource.data.keys().hasAny(['callupIds', 'callupUserIds', 'summaryId', 'lineupIds', 'lastLineupTeam']);
+      allow update: if signedIn() && stable() && isMatchStaffOf(resource.data)
+        && (!changed().hasAny(['memberUids', 'callupIds', 'callupUserIds', 'hasCallUp',
+                              'callUpDeadlineDate', 'callUpDeadlineTime', 'lineupIds', 'summaryId'])
+            || staff())
+        && (!changed().hasAny(['callupIds', 'callupUserIds'])
+            || validCallUpCounter(getAfter(counter('callups')).data.documentPath,
+                getAfter(counter('callups')).data.lastId - get(counter('callups')).data.lastId)
+                && getAfter(counter('callups')).data.documentPath.matches('matches/' + matchId + '/callups/[^/]+')
+                && getAfter(counter('callups')).data.lastId > get(counter('callups')).data.lastId)
+        && (!changed().hasAny(['summaryId']) || validSummaryLink(matchId))
+        && (!changed().hasAny(['lineupIds', 'lastLineupTeam']) || validLineupLink(matchId))
+        && !changed().hasAny(['dtUid'])
+        && (!changed().hasAny(['teamId', 'teamName', 'category', 'rival', 'rivalTeamId',
+                               'operatorUid', 'operatorName', 'location', 'date', 'time', 'matchDate',
+                               'matchType', 'condition', 'modality', 'periodMinutes', 'notes', 'cancelReason'])
+            || ((isAdmin() || (isDt() && resource.data.dtUid == me()))
+                && resource.data.status == 'PROGRAMADO'
+                && teamOwned(request.resource.data.teamId, resource.data.dtUid)
+                && validMatchTeam(request.resource.data) && validMatchOperator(request.resource.data)));
       allow delete: if false;
 
       // Convocatoria (US-17): el DT la arma; el jugador o su padre solo responde la suya
       match /callups/{callUpId} {
-        allow read: if signedIn();
-        allow create, delete: if isMatchStaff(matchId);
-        allow update: if isMatchStaff(matchId)
+        allow read: if canReadMatch(matchData(matchId));
+        allow create: if isMatchStaff(matchId) && validCallUp(callUpId, matchId);
+        allow update: if stable() && !changed().hasAny(['matchId', 'playerId', 'teamId', 'userUid', 'parentUid'])
+                     && (isMatchStaff(matchId)
                       || (signedIn()
                           && (resource.data.get('userUid', '') == me() || resource.data.get('parentUid', '') == me())
-                          && changed().hasOnly(['responseStatus', 'rejectReason', 'rejectComment', 'updatedAt']));
+                          && changed().hasOnly(['responseStatus', 'rejectReason', 'rejectComment', 'updatedAt', 'updatedBy', 'updatedByUid'])));
       }
       // Alineación (US-18)
       match /lineup/{lineupId} {
-        allow read: if signedIn();
-        allow write: if isMatchStaff(matchId);
+        allow read: if canReadMatch(matchData(matchId));
+        function permitted(teamId) {
+          return isAdmin() || (isDt() && (teamId == ''
+            ? matchData(matchId).dtUid == me()
+            : teamOwned(teamId, me()) && isMatchStaff(matchId)));
+        }
+        allow create: if signedIn() && permitted(request.resource.data.teamId)
+          && request.resource.data.matchId == matchId
+          && record('lineups', 'ALI', lineupId, 'matches/' + matchId + '/lineup/' + lineupId)
+          && getAfter(/databases/$(database)/documents/matches/$(matchId)).data.lineupIds[
+              request.resource.data.teamId == '' ? 'starting' : request.resource.data.teamId] == lineupId;
+        allow update: if signedIn() && stable()
+          && permitted(request.resource.data.get('teamId', ''))
+          && (!changed().hasAny(['teamId', 'matchId']) || lineupId == 'starting'
+              || request.resource.data.teamId == lineupId);
+        allow delete: if isAdmin();
       }
       // Eventos en vivo (US-19 / US-20)
       match /events/{eventId} {
-        allow read: if signedIn();
-        allow create, update: if isMatchStaff(matchId);
+        allow read: if canReadMatch(matchData(matchId));
+        function newEvent() {
+          let type = request.resource.data.type;
+          let relative = 'matches/' + matchId + '/events/' + eventId;
+          return request.resource.data.matchId == matchId && request.resource.data.registeredBy == me()
+            && ((type == 'GOL' && record('goals', 'GOL', eventId, relative))
+              || (type in ['TARJETA_AMARILLA', 'TARJETA_ROJA'] && record('cards', 'TAR', eventId, relative))
+              || (type == 'CAMBIO' && record('substitutions', 'SUS', eventId, relative))
+              || (!(type in ['GOL', 'TARJETA_AMARILLA', 'TARJETA_ROJA', 'CAMBIO'])
+                  && record('events', 'EVT', eventId, relative)));
+        }
+        allow create: if isMatchStaff(matchId) && newEvent();
+        allow update: if isMatchStaff(matchId) && stable() && !changed().hasAny(['matchId', 'registeredBy']);
         allow delete: if false;   // los eventos se anulan, no se borran (US-20)
         match /history/{historyId} {
-          allow read: if signedIn();
-          allow create: if isMatchStaff(matchId);
+          allow read: if canReadMatch(matchData(matchId));
+          allow create: if isMatchStaff(matchId)
+            && request.resource.data.eventId == eventId && request.resource.data.matchId == matchId
+            && request.resource.data.usuarioUid == me()
+            && record('eventHistory', 'HIS', historyId, 'matches/' + matchId + '/events/' + eventId + '/history/' + historyId);
           allow update, delete: if false;   // bitácora inmutable
         }
       }
@@ -95,70 +337,131 @@ service cloud.firestore {
     // ---------- Anuncios (US-22) ----------
     match /announcements/{id} {
       allow read: if signedIn();
-      allow create: if (isAdmin() || isDt()) && request.resource.data.authorUid == request.auth.uid;
+      allow create: if (isAdmin() || isDt()) && request.resource.data.authorUid == request.auth.uid
+        && record('announcements', 'ANU', id, 'announcements/' + id);
       // El autor edita; cualquiera con sesión solo puede marcarlo como leído
-      allow update: if (signedIn() && resource.data.authorUid == request.auth.uid)
+      allow update: if stable() && !changed().hasAny(['authorUid']) && ((signedIn() && resource.data.authorUid == request.auth.uid)
                     || isAdmin()
-                    || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']));
+                    || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])));
       allow delete: if (signedIn() && resource.data.authorUid == request.auth.uid) || isAdmin();
     }
 
     // ---------- Comunidad (US-23) y moderación (US-24) ----------
     match /posts/{postId} {
+      function reportedNow() {
+        let index = docPath('posts/' + postId + '/reportOwners/' + me());
+        let ref = docPath('reports/' + getAfter(index).data.reportId);
+        let count = resource.data.get('reportCount', 0) + 1;
+        return !exists(index) && getAfter(ref).data.createdAt == request.time
+          && request.resource.data.reportCount == count
+          && resource.data.status == 'VISIBLE'
+          && request.resource.data.status == (count >= 3 ? 'OCULTO' : 'VISIBLE');
+      }
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid
-                    && request.resource.data.status == 'VISIBLE';
-      allow update: if isAdmin()
+                    && request.resource.data.status == 'VISIBLE'
+        && request.resource.data.reportCount == 0 && request.resource.data.commentCount == 0
+        && record('posts', 'PUB', postId, 'posts/' + postId);
+      allow update: if signedIn() && stable() && !changed().hasAny(['authorUid'])
+        && (!changed().hasAny(['reportCount']) || reportedNow())
+        && (isAdmin()
                     // El autor puede eliminar (marcar ELIMINADO) su publicación
                     || (signedIn() && resource.data.authorUid == request.auth.uid
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reactions', 'commentCount', 'reportCount']))
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reactions', 'commentCount', 'reportCount', 'updatedAt', 'updatedByUid', 'updatedBy']))
                     // Los demás: reaccionar, comentar, reportar (3 reportes la ocultan)
                     || (signedIn()
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'commentCount', 'reportCount', 'status'])
-                        && (request.resource.data.status == resource.data.status || request.resource.data.status == 'OCULTO'));
+                        && (request.resource.data.status == resource.data.status || (changed().hasAny(['reportCount']) && request.resource.data.status == 'OCULTO'))));
       allow delete: if false;   // nunca se borran físicamente
+      match /reportOwners/{uid} {
+        allow get: if signedIn() && (uid == me() || isAdmin());
+        allow create: if signedIn() && uid == me()
+          && request.resource.data.keys().hasOnly(['reportId'])
+          && exists(/databases/$(database)/documents/posts/$(postId))
+          && getAfter(/databases/$(database)/documents/reports/$(request.resource.data.reportId)).data.reporterUid == uid
+          && getAfter(/databases/$(database)/documents/reports/$(request.resource.data.reportId)).data.postId == postId
+          && getAfter(/databases/$(database)/documents/reports/$(request.resource.data.reportId)).data.createdAt == request.time;
+      }
       match /comments/{commentId} {
         allow read: if signedIn();
-        allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid;
+        allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.postId == postId && record('comments', 'COM', commentId, 'posts/' + postId + '/comments/' + commentId);
         allow delete: if (signedIn() && resource.data.authorUid == request.auth.uid) || isAdmin();
         allow update: if false;
       }
     }
     match /reports/{reportId} {
-      allow create: if signedIn() && request.resource.data.reporterUid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.reporterUid == me()
+        && record('reports', 'REP', reportId, 'reports/' + reportId)
+        && getAfter(/databases/$(database)/documents/posts/$(request.resource.data.postId)/reportOwners/$(me())).data.reportId == reportId
+        && !exists(/databases/$(database)/documents/reports/$(request.resource.data.postId + '_' + me()))
+        && getAfter(/databases/$(database)/documents/posts/$(request.resource.data.postId)).data.reportCount
+          == get(/databases/$(database)/documents/posts/$(request.resource.data.postId)).data.get('reportCount', 0) + 1;
       // get de un id inexistente (para evitar doble reporte) también se permite
       allow read: if isAdmin() || (signedIn() && (resource == null || resource.data.reporterUid == request.auth.uid));
-      allow update: if isAdmin();
+      allow update: if isAdmin() && stable() && !changed().hasAny(['postId', 'reporterUid']);
       allow delete: if false;
     }
 
     // ---------- Resumen IA del partido (US-25 a US-27) ----------
-    match /summaries/{matchId} {
+    match /summaries/{summaryId} {
       allow read: if signedIn();
-      // Solo el DT de ESE partido genera, edita y aprueba su resumen
-      allow create, update: if isDt() && matchData(matchId).dtUid == me();
+      allow create: if isDt() && matchData(request.resource.data.matchId).dtUid == me()
+        && record('summaries', 'RES', summaryId, 'summaries/' + summaryId)
+        && getAfter(/databases/$(database)/documents/matches/$(request.resource.data.matchId)).data.summaryId == summaryId;
+      allow update: if isDt() && matchData(resource.data.get('matchId', summaryId)).dtUid == me()
+        && stable() && (!changed().hasAny(['matchId']) || request.resource.data.matchId == summaryId);
       allow delete: if false;
     }
 
     // ---------- Jugadores (US-02, US-04, US-05) ----------
     match /players/{playerId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (staff() || linkedPlayer(resource.data));
       // DT registra a sus jugadores; JUG/PAD solo crean su propia solicitud o la de su hijo
-      allow create: if isAdmin()
-                    || (isDt() && request.resource.data.dtUid == me())
-                    || (signedIn() && request.resource.data.get('userUid', '') == me())
-                    || (signedIn() && request.resource.data.get('parentUid', '') == me());
+      allow create: if signedIn() && record('players', 'JUG', playerId, 'players/' + playerId)
+        && validRosterTeam(request.resource.data)
+        && request.resource.data.privateProfile == true
+        && !request.resource.data.keys().hasAny(playerContactFields())
+        && existsAfter(/databases/$(database)/documents/players/$(playerId)/private/contact)
+        && (isAdmin() || (isDt() && request.resource.data.dtUid == me())
+          || (role() == 'JUG' && request.resource.data.userUid == me() && request.resource.data.linkStatus == 'PENDIENTE')
+          || (role() == 'PAD' && request.resource.data.parentUid == me() && request.resource.data.linkStatus == 'PENDIENTE'));
       // JUG/PAD editan solo su ficha y sin tocar vínculo, equipo ni estado
-      allow update: if isAdmin() || isDt()
+      allow update: if stable() && !changed().hasAny(playerContactFields().concat(['privateProfile']))
+        && (!changed().hasAny(['teamId', 'dtUid']) || validRosterTeam(request.resource.data))
+        && (isAdmin() || (isDt() && resource.data.dtUid == me() && !changed().hasAny(['dtUid', 'monthlyFees', 'latestFeeId']))
                     || (signedIn()
                         && (resource.data.get('userUid', '') == me() || resource.data.get('parentUid', '') == me())
-                        && !changed().hasAny(['linkStatus', 'dtUid', 'teamId', 'teamName', 'active', 'userUid', 'parentUid', 'dni', 'monthlyFees']));
-      allow delete: if isAdmin();
+                        && !changed().hasAny(['linkStatus', 'dtUid', 'teamId', 'teamName', 'active', 'userUid', 'parentUid', 'dni', 'monthlyFees', 'latestFeeId'])));
+      allow delete: if false;
+
+      match /private/contact {
+        function ownerBefore() { return get(/databases/$(database)/documents/players/$(playerId)).data; }
+        function ownerAfter() { return getAfter(/databases/$(database)/documents/players/$(playerId)).data; }
+        function allowedData() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(playerContactFields()) && d.get('dni', '') is string
+            && d.get('birthDate', '') is string && d.get('phone', '') is string && d.get('email', '') is string;
+        }
+        allow get: if signedIn() && privatePlayer(ownerBefore());
+        allow create: if signedIn() && privatePlayer(ownerAfter()) && allowedData()
+          && (request.resource.data.get('dni', '') == ''
+            || getAfter(/databases/$(database)/documents/dniIndex/$(request.resource.data.dni)).data.playerId == playerId);
+        allow update: if signedIn() && privatePlayer(ownerBefore()) && allowedData() && !changed().hasAny(['dni']);
+      }
 
       // Historial de asistencia por jugador (US-13 / US-14)
       match /attendanceHistory/{recordId} {
-        allow read: if signedIn();
-        allow write: if isDt() || isAdmin();
+        allow read: if signedIn() && privatePlayer(get(/databases/$(database)/documents/players/$(playerId)).data);
+        function validHistory() {
+          let row = request.resource.data;
+          let session = getAfter(docPath('trainings/' + recordId)).data;
+          let player = get(docPath('players/' + playerId)).data;
+          return row.trainingId == recordId && row.teamId == session.teamId
+            && player.teamId == session.teamId && row.attendanceId == session.attendanceId
+            && (isAdmin() || (isDt() && session.dtUid == me() && player.dtUid == me()));
+        }
+        allow create, update: if signedIn() && validHistory();
       }
     }
 
@@ -166,67 +469,139 @@ service cloud.firestore {
     match /dniIndex/{dni} {
       allow get: if signedIn();
       allow list: if false;
-      allow create: if signedIn();
-      allow update, delete: if isAdmin();
+      allow create: if signedIn() && request.resource.data.keys().hasOnly(['playerId'])
+        && getAfter(/databases/$(database)/documents/players/$(request.resource.data.playerId)/private/contact).data.dni == dni
+        && !exists(/databases/$(database)/documents/players/$(request.resource.data.playerId));
+    }
+
+    match /feeIndex/{feeId} {
+      allow get: if isAdmin();
+      allow create: if isAdmin()
+        && record('monthlyFees', 'CUO', feeId, 'feeIndex/' + feeId)
+        && getAfter(/databases/$(database)/documents/players/$(request.resource.data.playerId)).data.latestFeeId == feeId;
     }
 
     // ---------- Entrenamientos y asistencia (US-11 a US-14) ----------
     match /trainings/{trainingId} {
-      allow read: if signedIn();
-      allow write: if isDt() || isAdmin();
+      allow read: if signedIn() && (isAdmin()
+        || (isDt() && (resource.data.dtUid == me()
+            || get(docPath('teams/' + resource.data.teamId)).data.dtUid == me()))
+        || (role() in ['JUG', 'PAD'] && isTeamMember(resource.data.teamId)));
+      allow create: if (isAdmin() || (isDt() && request.resource.data.dtUid == me()))
+        && record('trainings', 'ENT', trainingId, 'trainings/' + trainingId)
+        && teamOwned(request.resource.data.teamId, request.resource.data.dtUid);
+      allow update: if stable() && (isAdmin() || (isDt() && resource.data.dtUid == me()))
+        && !changed().hasAny(['dtUid'])
+        && (!changed().hasAny(['teamId']) || teamOwned(request.resource.data.teamId, resource.data.dtUid))
+        && (!changed().hasAny(['attendanceId'])
+          || (!resource.data.keys().hasAny(['attendanceId'])
+              && getAfter(/databases/$(database)/documents/attendance/$(request.resource.data.attendanceId)).data.trainingId == trainingId));
     }
     match /attendance/{recordId} {
-      allow read: if signedIn();
-      allow write: if isDt() || isAdmin();
+      function validAttendance() {
+        let d = request.resource.data;
+        let session = getAfter(/databases/$(database)/documents/trainings/$(d.trainingId)).data;
+        return session.teamId == d.teamId && session.dtUid == d.dtUid && session.attendanceId == recordId
+          && (isAdmin() || (isDt() && session.dtUid == me()));
+      }
+      allow get: if staff() && (resource == null || isAdmin() || resource.data.dtUid == me());
+      allow list: if isAdmin() || (isDt() && resource.data.dtUid == me());
+      allow create: if signedIn() && validAttendance() && record('attendance', 'ASI', recordId, 'attendance/' + recordId);
+      allow update: if signedIn() && stable() && validAttendance() && !changed().hasAny(['trainingId', 'teamId', 'dtUid']);
     }
     match /attendanceHistory/{recordId} {
-      allow read: if signedIn();
-      allow write: if isDt() || isAdmin();
+      allow read: if isAdmin();
     }
 
-    // ---------- Catálogo configurable de eventos (US-09): lo edita solo el ADM ----------
-    match /event_catalog/{eventTypeId} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    // ---------- Pruebas y convocatorias abiertas (US-10) ----------
-    match /tryouts/{tryoutId} {
-      allow read: if signedIn();
-      allow create: if isDt() && request.resource.data.dtUid == me();
-      allow update: if isAdmin()
-                    || (isDt() && resource.data.dtUid == me())
-                    // JUG/PAD solo suman su interés al contador
-                    || (signedIn() && changed().hasOnly(['interestedCount']));
-      allow delete: if isAdmin() || (isDt() && resource.data.dtUid == me());
-
-      match /candidates/{candidateId} {
-        allow read: if signedIn();
-        allow create: if signedIn() && request.resource.data.userUid == me();
-        allow update: if false;
-        allow delete: if isAdmin()
-                      || (isDt() && get(/databases/$(database)/documents/tryouts/$(tryoutId)).data.dtUid == me());
-      }
-    }
-    match /tryoutReports/{reportId} {
-      allow create: if signedIn() && request.resource.data.reporterUid == me();
-      allow read: if isAdmin() || (signedIn() && (resource == null || resource.data.reporterUid == me()));
-      allow update: if isAdmin();
-      allow delete: if false;
-    }
-
-    // ---------- Notificaciones: cualquiera las envía, solo el destinatario las lee ----------
+    // ---------- Notificaciones internas ----------
     match /notifications/{notifId} {
-      allow create: if signedIn();
-      allow read, update, delete: if signedIn() && resource.data.recipientUid == me();
+      function callUpResponse(d) {
+        let response = get(docPath('matches/' + d.relatedId + '/callups/' + d.callUpId)).data;
+        return linkedPlayer(response) && response.responseStatus in ['CONFIRMADO', 'RECHAZADO']
+          && d.recipientUid == matchData(d.relatedId).dtUid;
+      }
+      function permittedSender(d) {
+        return isAdmin()
+          || (d.type == 'MATCH' && (isMatchStaff(d.relatedId)
+              || (role() in ['JUG', 'PAD'] && d.get('callUpId', '') != '' && callUpResponse(d))))
+          || (d.type == 'SUMMARY' && isDt() && matchData(d.relatedId).dtUid == me())
+          || (d.type == 'TRAINING' && isDt() && get(docPath('trainings/' + d.relatedId)).data.dtUid == me())
+          || (d.type == 'ANNOUNCEMENT' && isDt() && get(docPath('announcements/' + d.relatedId)).data.authorUid == me())
+          || (d.type in ['TEAM_ACCEPT', 'TEAM_REJECT'] && isDt() && teamOwned(d.relatedId, me()))
+          || (d.type == 'TEAM_REQUEST' && role() in ['JUG', 'PAD'] && teamOwned(d.relatedId, d.recipientUid));
+      }
+      allow create: if signedIn()
+        && request.resource.data.recipientUid is string
+        && request.resource.data.title is string && request.resource.data.title.size() <= 180
+        && request.resource.data.message is string && request.resource.data.message.size() <= 2000
+        && request.resource.data.read == false
+        && exists(docPath('users/' + request.resource.data.recipientUid))
+        && permittedSender(request.resource.data)
+        && record('notifications', 'NOT', notifId, 'notifications/' + notifId);
+      allow read, delete: if signedIn() && resource.data.recipientUid == me();
+      allow update: if signedIn() && resource.data.recipientUid == me() && changed().hasOnly(['read']);
     }
 
     // ---------- Solicitudes de anulación de eventos (US-20) ----------
     match /eventCancellationRequests/{requestId} {
-      allow create: if signedIn() && request.resource.data.get('requestingDtUid', '') == me();
+      allow create: if signedIn() && request.resource.data.get('requestingDtUid', '') == me()
+        && record('eventCancellations', 'SOL', requestId, 'eventCancellationRequests/' + requestId);
       allow read: if isAdmin() || (signedIn() && resource.data.get('requestingDtUid', '') == me());
       allow update: if isAdmin();
       allow delete: if false;
+    }
+    match /event_catalog/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() && record('eventCatalog', 'CAT', id, 'event_catalog/' + id);
+      allow update: if isAdmin() && stable();
+    }
+    match /match_events/{id} {
+      allow read: if signedIn();
+    }
+    match /tryouts/{id} {
+      allow read: if signedIn();
+      allow create: if isDt() && request.resource.data.dtUid == me()
+        && teamOwned(request.resource.data.teamId, me())
+        && record('tryouts', 'PRU', id, 'tryouts/' + id);
+      allow update: if stable() && !changed().hasAny(['dtUid'])
+        && ((isDt() && resource.data.dtUid == me()
+             && teamOwned(request.resource.data.teamId, me()))
+            || (role() in ['JUG', 'PAD'] && changed().hasOnly(['interestedCount'])
+                && request.resource.data.interestedCount == resource.data.interestedCount + 1
+                && getAfter(counter('candidates')).data.documentPath.matches('tryouts/' + id + '/candidates/[^/]+')
+                && getAfter(docPath(getAfter(counter('candidates')).data.documentPath)).data.userUid == me()
+                && getAfter(docPath(getAfter(counter('candidates')).data.documentPath)).data.createdAt == request.time));
+      allow delete: if isDt() && resource.data.dtUid == me();
+      match /candidates/{candidateId} {
+        allow read: if isAdmin() || (isDt() && get(/databases/$(database)/documents/tryouts/$(id)).data.dtUid == me())
+          || (signedIn() && resource.data.userUid == me());
+        allow create: if role() in ['JUG', 'PAD'] && request.resource.data.userUid == me()
+          && request.resource.data.tryoutId == id
+          && record('candidates', 'POS', candidateId, 'tryouts/' + id + '/candidates/' + candidateId)
+          && getAfter(/databases/$(database)/documents/tryouts/$(id)/candidateOwners/$(me())).data.candidateId == candidateId;
+      }
+      match /reportOwners/{uid} {
+        allow get: if signedIn() && uid == me();
+        allow create: if signedIn() && uid == me() && request.resource.data.keys().hasOnly(['reportId'])
+          && getAfter(/databases/$(database)/documents/tryoutReports/$(request.resource.data.reportId)).data.reporterUid == uid
+          && getAfter(/databases/$(database)/documents/tryoutReports/$(request.resource.data.reportId)).data.tryoutId == id
+          && getAfter(/databases/$(database)/documents/tryoutReports/$(request.resource.data.reportId)).data.createdAt == request.time;
+      }
+      match /candidateOwners/{uid} {
+        allow get: if signedIn() && me() == uid;
+        allow create: if signedIn() && me() == uid && request.resource.data.keys().hasOnly(['candidateId'])
+          && getAfter(/databases/$(database)/documents/tryouts/$(id)/candidates/$(request.resource.data.candidateId)).data.userUid == uid
+          && getAfter(/databases/$(database)/documents/tryouts/$(id)/candidates/$(request.resource.data.candidateId)).data.createdAt == request.time;
+      }
+    }
+    match /tryoutReports/{id} {
+      allow create: if signedIn() && request.resource.data.reporterUid == me()
+        && record('reports', 'REP', id, 'tryoutReports/' + id)
+        && getAfter(/databases/$(database)/documents/tryouts/$(request.resource.data.tryoutId)/reportOwners/$(me())).data.reportId == id
+        && !exists(/databases/$(database)/documents/tryoutReports/$(request.resource.data.tryoutId + '_' + me()));
+      allow get: if isAdmin() || (signedIn() && (resource == null || resource.data.reporterUid == me()));
+      allow list: if isAdmin();
+      allow update: if isAdmin() && stable() && !changed().hasAny(['tryoutId', 'reporterUid']);
     }
   }
 }

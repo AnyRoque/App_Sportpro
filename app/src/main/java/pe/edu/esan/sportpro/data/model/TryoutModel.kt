@@ -8,7 +8,7 @@ import com.google.firebase.firestore.ServerTimestamp
  * Documento tryouts/{tryoutId} (US-10: Convocatoria abierta / aviso de pruebas).
  */
 data class TryoutModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val teamId: String = "",
     val teamName: String = "",
     val verifiedTeam: Boolean = true, // Insignia "Equipo verificado"
@@ -28,14 +28,19 @@ data class TryoutModel(
     val dtName: String = "",
     val interestedCount: Int = 0,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}
 
 /**
  * Documento tryouts/{tryoutId}/candidates/{candidateId}.
  * NUNCA almacena ni expone números telefónicos de menores de edad (regla de privacidad).
  */
 data class TryoutCandidateModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val tryoutId: String = "",
     val userUid: String = "",
     val name: String = "", // Nombre completo
@@ -43,4 +48,9 @@ data class TryoutCandidateModel(
     val position: String = "", // Posición elegida
     val role: String = "", // "JUG" o "PAD"
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

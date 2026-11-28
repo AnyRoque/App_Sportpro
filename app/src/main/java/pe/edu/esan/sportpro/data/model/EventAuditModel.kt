@@ -14,7 +14,7 @@ object AuditChangeType {
  * Subcolección: matches/{matchId}/events/{eventId}/history/{historyId}
  */
 data class EventAuditModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val eventId: String = "",
     val matchId: String = "",
     val tipoCambio: String = AuditChangeType.EDIT, // EDICION o ANULACION
@@ -24,4 +24,9 @@ data class EventAuditModel(
     val valorOriginal: String = "",
     val valorNuevo: String = "",
     @ServerTimestamp val fechaHora: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

@@ -23,18 +23,25 @@ data class TacticalPosition(
 
 /**
  * Registro completo de alineación e inicio de partido (US-18).
- * Documento matches/{matchId}/lineup/starting
+ * Documento matches/{matchId}/lineup/{teamId}. "starting" se conserva para datos antiguos.
  */
 data class LineupModel(
-    @DocumentId var id: String = "starting",
+    var id: String = "",
     val matchId: String = "",
+    val teamId: String = "",
+    val teamName: String = "",
     val formation: String = "4-3-3",
     val modality: Int = 11,
     val positions: List<TacticalPosition> = emptyList(),
     val substitutePlayerIds: List<String> = emptyList(),
     val savedBy: String = "",
     @ServerTimestamp val savedAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}
 
 /**
  * Diseños tácticos de posiciones predeterminadas en el campo gráfico.

@@ -3,11 +3,16 @@ package pe.edu.esan.sportpro.data.remote
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccumulatesStatType
 import pe.edu.esan.sportpro.data.model.EventCatalogModel
-import java.util.UUID
 
 /**
  * Repositorio para la Gestión Configurable del Catálogo de Eventos del Partido (US-09).
@@ -19,6 +24,7 @@ object EventCatalogRepository {
     private const val MATCH_EVENTS = "match_events"
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val catalogCollection get() = firestore.collection(EVENT_CATALOG)
 
     // Lista por defecto de los 13 eventos base (Inician desactivados para que el ADM los active según reglas)
@@ -40,32 +46,37 @@ object EventCatalogRepository {
 
     private val _localCatalog = MutableStateFlow<List<EventCatalogModel>>(defaultEventsBase)
 
-    init {
-        try {
-            catalogCollection.addSnapshotListener { snapshot, error ->
-                if (error == null && snapshot != null && !snapshot.isEmpty) {
-                    val list = snapshot.toObjects(EventCatalogModel::class.java)
-                    if (list.isNotEmpty()) {
-                        _localCatalog.value = list.sortedBy { it.name }
-                    }
-                }
+    private val observedCatalog = callbackFlow {
+        trySend(_localCatalog.value)
+        val listener = catalogCollection.addSnapshotListener { snapshot, error ->
+            if (error == null && snapshot != null && !snapshot.isEmpty) {
+                val list = snapshot.documents
+                    .filter { it.getBoolean("archived") != true }
+                    .mapNotNull { it.toObject(EventCatalogModel::class.java) }
+                    .sortedBy { it.name }
+                _localCatalog.value = list
+                trySend(list)
             }
-        } catch (_: Exception) {}
-    }
+        }
+        awaitClose { listener.remove() }
+    }.shareIn(
+        CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000, replayExpirationMillis = 0),
+        replay = 1
+    )
 
     suspend fun seedDefaultsIfEmpty(): Result<Unit> {
         return try {
             val snapshot = catalogCollection.get().await()
             if (snapshot.isEmpty) {
                 for (event in defaultEventsBase) {
-                    val docRef = catalogCollection.document()
-                    docRef.set(event.copy(id = docRef.id)).await()
+                    ids.create(catalogCollection, SportProEntity.EVENT_CATALOG, event.firestoreFields())
                 }
             } else {
-                val list = snapshot.toObjects(EventCatalogModel::class.java)
-                if (list.isNotEmpty()) {
-                    _localCatalog.value = list.sortedBy { it.name }
-                }
+                _localCatalog.value = snapshot.documents
+                    .filter { it.getBoolean("archived") != true }
+                    .mapNotNull { it.toObject(EventCatalogModel::class.java) }
+                    .sortedBy { it.name }
             }
             Result.success(Unit)
         } catch (_: Exception) {
@@ -73,7 +84,7 @@ object EventCatalogRepository {
         }
     }
 
-    fun observeEventCatalog(): Flow<List<EventCatalogModel>> = _localCatalog.asStateFlow()
+    fun observeEventCatalog(): Flow<List<EventCatalogModel>> = observedCatalog
 
     suspend fun createEventType(item: EventCatalogModel): Result<String> {
         val cleanName = item.name.trim()
@@ -87,17 +98,13 @@ object EventCatalogRepository {
             return Result.failure(Exception("Ya existe un tipo de evento con el nombre '$cleanName'."))
         }
 
-        val newId = UUID.randomUUID().toString()
-        val toSave = item.copy(id = newId, name = cleanName)
-
-        val updatedList = (currentList + toSave).sortedBy { it.name }
-        _localCatalog.value = updatedList
-
-        try {
-            catalogCollection.document(newId).set(toSave).await()
-        } catch (_: Exception) {}
-
-        return Result.success(newId)
+        return try {
+            val toSave = item.copy(name = cleanName)
+            val ref = ids.create(catalogCollection, SportProEntity.EVENT_CATALOG, toSave.firestoreFields())
+            Result.success(ref.id)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun updateEventType(item: EventCatalogModel): Result<Unit> {
@@ -112,30 +119,20 @@ object EventCatalogRepository {
             return Result.failure(Exception("Ya existe otro tipo de evento con el nombre '$cleanName'."))
         }
 
-        val updatedList = currentList.map {
-            if (it.id == item.id) item.copy(name = cleanName) else it
-        }.sortedBy { it.name }
-        _localCatalog.value = updatedList
-
-        try {
-            catalogCollection.document(item.id).set(item.copy(name = cleanName)).await()
-        } catch (_: Exception) {}
-
-        return Result.success(Unit)
+        return try {
+            ids.update(catalogCollection.document(item.id), item.copy(name = cleanName).firestoreFields() - "createdAt")
+            Result.success(Unit)
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
     }
 
-    suspend fun toggleActiveStatus(id: String, active: Boolean): Result<Unit> {
-        val currentList = _localCatalog.value
-        val updatedList = currentList.map {
-            if (it.id == id) it.copy(active = active) else it
-        }
-        _localCatalog.value = updatedList
-
-        try {
-            catalogCollection.document(id).update("active", active).await()
-        } catch (_: Exception) {}
-
-        return Result.success(Unit)
+    suspend fun toggleActiveStatus(id: String, active: Boolean): Result<Unit> = try {
+        ids.update(catalogCollection.document(id), mapOf("active" to active),
+            if (active) "UPDATE" else "DEACTIVATE")
+        Result.success(Unit)
+    } catch (error: Exception) {
+        Result.failure(error)
     }
 
     suspend fun deleteEventType(item: EventCatalogModel): Result<Unit> {
@@ -152,13 +149,11 @@ object EventCatalogRepository {
             }
         } catch (_: Exception) {}
 
-        val currentList = _localCatalog.value
-        _localCatalog.value = currentList.filter { it.id != item.id }
-
-        try {
-            catalogCollection.document(item.id).delete().await()
-        } catch (_: Exception) {}
-
-        return Result.success(Unit)
+        return try {
+            ids.update(catalogCollection.document(item.id), mapOf("active" to false, "archived" to true), "DEACTIVATE")
+            Result.success(Unit)
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
     }
 }

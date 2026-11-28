@@ -65,7 +65,7 @@ fun PlayerDetailScreen(
             StatusChip(if (p.active) "ACTIVO" else "INACTIVO")
         }
         InfoCard("Datos personales", listOf(
-            "Fecha de nacimiento" to p.birthDate, "DNI" to p.dni.ifBlank { "—" }
+            "Fecha de nacimiento" to p.birthDate.ifBlank { "—" }, "DNI" to p.dni.ifBlank { "—" }
         ))
         InfoCard("Datos deportivos", listOf(
             "Posición" to p.position, "Número" to (p.shirtNumber?.toString() ?: "—")
@@ -77,7 +77,9 @@ fun PlayerDetailScreen(
         ))
         InfoCard("Contacto", listOf("Teléfono" to p.phone.ifBlank { "—" }, "Correo" to p.email.ifBlank { "—" }))
         InfoCard("Contacto de emergencia", listOf(
-            "Nombre" to p.emergencyName, "Parentesco" to p.emergencyRelation, "Teléfono" to p.emergencyPhone
+            "Nombre" to p.emergencyName.ifBlank { "—" },
+            "Parentesco" to p.emergencyRelation.ifBlank { "—" },
+            "Teléfono" to p.emergencyPhone.ifBlank { "—" }
         ))
 
         if (canEdit) {

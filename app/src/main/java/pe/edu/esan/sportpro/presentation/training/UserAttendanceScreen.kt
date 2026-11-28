@@ -26,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import pe.edu.esan.sportpro.data.model.AttendanceStatus
@@ -39,7 +40,6 @@ import pe.edu.esan.sportpro.presentation.components.StatusChip
 import pe.edu.esan.sportpro.ui.theme.StatusApproved
 import pe.edu.esan.sportpro.ui.theme.StatusPending
 import pe.edu.esan.sportpro.ui.theme.StatusRejected
-import java.util.Locale
 
 private val monthMap = mapOf(
     "ALL" to "Todos los meses",
@@ -103,7 +103,7 @@ fun UserAttendanceScreen(
         }
 
         // Tarjeta de Resumen Estadístico y Porcentaje de Compromiso
-        val formattedPercentage = String.format(Locale.getDefault(), "%.1f", state.attendancePercentage)
+        val formattedPercentage = String.format(LocalConfiguration.current.locales[0], "%.1f", state.attendancePercentage)
 
         Card(
             modifier = Modifier.fillMaxWidth(),

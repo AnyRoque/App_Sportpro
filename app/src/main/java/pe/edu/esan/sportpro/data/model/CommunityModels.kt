@@ -19,7 +19,7 @@ object AnnouncementType {
 
 /** Documento announcements/{id} */
 data class AnnouncementModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val title: String = "",
     val description: String = "",
     val type: String = AnnouncementType.GENERAL,
@@ -36,7 +36,12 @@ data class AnnouncementModel(
     val edited: Boolean = false,
     val readBy: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}
 
 // =====================================================================
 // US-23: Comunidad
@@ -64,7 +69,7 @@ object ReactionType {
 
 /** Documento posts/{id} */
 data class PostModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val text: String = "",
     val imageUrl: String = "",
     val visibility: String = PostVisibility.TEAM,
@@ -80,20 +85,30 @@ data class PostModel(
     val status: String = PostStatus.VISIBLE,
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val reactionCount: Int get() = reactions.size
 }
 
 /** Documento posts/{postId}/comments/{id} */
 data class CommentModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val postId: String = "",
     val text: String = "",
     val authorUid: String = "",
     val authorName: String = "",
     val authorRole: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}
 
 // =====================================================================
 // US-24: Reportes y moderación
@@ -122,7 +137,7 @@ object ModerationAction {
 
 /** Documento reports/{postId_reporterUid} (un usuario no puede reportar dos veces lo mismo) */
 data class ReportModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val postId: String = "",
     val postText: String = "",
     val postAuthorUid: String = "",
@@ -135,7 +150,12 @@ data class ReportModel(
     val resolvedBy: String = "",
     val resolvedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}
 
 // =====================================================================
 // US-25 a US-27: Resumen narrativo del partido con IA
@@ -149,7 +169,7 @@ object SummaryStatus {
 
 /** Documento summaries/{matchId} (un resumen vigente por partido) */
 data class MatchSummaryModel(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val matchId: String = "",
     val teamId: String = "",
     val teamName: String = "",
@@ -174,4 +194,9 @@ data class MatchSummaryModel(
     val approvedByName: String = "",
     val approvedAt: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

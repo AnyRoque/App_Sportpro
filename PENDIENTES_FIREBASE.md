@@ -1,0 +1,9 @@
+# Configuraciones pendientes de Firebase
+
+- Confirmar en Firebase Console la edición y el estado de Firestore `(default)` en `sportpro-73035`, y que el registro Android sea `pe.edu.esan.sportpro`. Las dos configuraciones Android locales coinciden. Firebase CLI devolvió un error de autenticación en la consulta de producción. El emulador usó la edición Standard.
+- Confirmar Email/Password y el envío de correos de recuperación. Inventariar las cuentas ADM existentes antes de preparar el alta inicial o la relación entre UID y perfil.
+- Cotejar las reglas e índices actualmente desplegados con el código local. Antes de publicar, ensayar el tratamiento de fichas históricas con contactos embebidos, la inicialización de contadores y los `memberUids` de los partidos antiguos. Una ficha de jugador aceptada debe aparecer en los partidos autorizados.
+- Ensayar con el inventario histórico las membresías de entrenamiento. La app crea el enlace de lectura de forma perezosa desde la ficha activa y aceptada. El servidor valida el UID y el estado de esa ficha en cada consulta. La asistencia grupal queda limitada al DT responsable y ADM.
+- Auditar el directorio de cuentas para DT, la lectura de anuncios, los resúmenes, las reacciones y los límites de las transacciones con planteles grandes. La ficha privada de jugador y su proyección de asistencia tienen reglas individuales.
+- Confirmar el bucket Supabase `jugadores-fotos`, sus políticas de acceso, las fotos de comunidad y la configuración del proveedor Gemini en un entorno de pruebas. La clave Gemini embebida mediante BuildConfig se puede recuperar del APK y requiere una integración de servidor antes de distribuirla como credencial privada.
+- Las pruebas productivas y el corte requieren autorización expresa. El inventario y los comandos de recuperación están descritos en [MIGRACION_FIREBASE.md](MIGRACION_FIREBASE.md).

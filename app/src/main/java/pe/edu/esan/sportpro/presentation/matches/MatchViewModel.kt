@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.MatchCondition
 import pe.edu.esan.sportpro.data.model.MatchModality
@@ -64,10 +65,20 @@ class MatchViewModel : ViewModel() {
     fun loadMatchesForUser(user: UserModel) {
         viewModelScope.launch {
             _isLoading.value = true
-            MatchRepository.observeMatchesForUser(user).collect { list ->
-                _matches.value = list.sortedByDescending { it.date }
-                _isLoading.value = false
-            }
+            MatchRepository.observeMatchesForUser(user)
+                .catch { e ->
+                    _matches.value = emptyList()
+                    _isLoading.value = false
+                    _error.value = when {
+                        e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ->
+                            "Tu sesión ya no tiene permiso para cargar los partidos. Vuelve a iniciar sesión."
+                        else -> "No se pudieron cargar los partidos. Revisa tu conexión e inténtalo de nuevo."
+                    }
+                }
+                .collect { list ->
+                    _matches.value = list.sortedByDescending { it.date }
+                    _isLoading.value = false
+                }
         }
     }
 

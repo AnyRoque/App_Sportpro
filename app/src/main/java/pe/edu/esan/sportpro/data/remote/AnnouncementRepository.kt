@@ -49,6 +49,7 @@ object AnnouncementRepository {
     private const val ANNOUNCEMENTS = "announcements"
     private const val NOTIFICATIONS = "notifications"
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val announcements get() = firestore.collection(ANNOUNCEMENTS)
 
     /** Anuncios de toda la academia (teamId vacío) y de los equipos del usuario, en tiempo real. */
@@ -83,10 +84,10 @@ object AnnouncementRepository {
 
     suspend fun save(a: AnnouncementModel, recipientUids: List<String>): Result<Unit> = try {
         if (a.id.isBlank()) {
-            val ref = announcements.add(a).await()
+            val ref = ids.create(announcements, SportProEntity.ANNOUNCEMENT, a.firestoreFields())
             notify(recipientUids, a, ref.id)
         } else {
-            announcements.document(a.id).set(a.copy(edited = true)).await()
+            ids.update(announcements.document(a.id), a.copy(edited = true).firestoreFields() - "createdAt" - "readBy")
         }
         Result.success(Unit)
     } catch (e: Exception) {
@@ -129,9 +130,9 @@ object AnnouncementRepository {
     }
 
     /** Notificación interna (misma colección "notifications" que usa el módulo de partidos). */
-    private fun notify(uids: List<String>, a: AnnouncementModel, id: String) {
+    private suspend fun notify(uids: List<String>, a: AnnouncementModel, id: String) {
         uids.forEach { uid ->
-            firestore.collection(NOTIFICATIONS).add(
+            firestore.collection(NOTIFICATIONS).notifyBestEffort(
                 hashMapOf(
                     "recipientUid" to uid,
                     "teamId" to a.teamId,

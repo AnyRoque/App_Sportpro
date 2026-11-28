@@ -39,7 +39,7 @@ data class PlayerAttendanceItem(
  * Registro de asistencia completo de una sesión de entrenamiento (US-13).
  */
 data class AttendanceRecordModel(
-    @DocumentId var id: String = "", // Mismo ID que trainingId
+    var id: String = "",
     val trainingId: String = "",
     val teamId: String = "",
     val teamName: String = "",
@@ -56,6 +56,11 @@ data class AttendanceRecordModel(
     @ServerTimestamp val editedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val totalPlayers: Int get() = items.size
 
@@ -68,7 +73,7 @@ data class AttendanceRecordModel(
  * Almacenado en players/{playerId}/attendanceHistory/{trainingId}.
  */
 data class PlayerAttendanceRecord(
-    @DocumentId var id: String = "",
+    var id: String = "",
     val trainingId: String = "",
     val teamId: String = "",
     val teamName: String = "",
@@ -76,4 +81,9 @@ data class PlayerAttendanceRecord(
     val status: String = "", // "ASISTIO", "TARDANZA", "FALTA", "JUSTIFICADO"
     val justificationReason: String = "",
     @ServerTimestamp val recordedAt: Timestamp? = null
-)
+) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+}

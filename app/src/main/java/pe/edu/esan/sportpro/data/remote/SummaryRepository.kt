@@ -39,6 +39,10 @@ object SummaryRepository {
 
     private val firestore = FirebaseFirestore.getInstance()
     private val summaries get() = firestore.collection(SUMMARIES)
+    private val ids = SportProIdGenerator(firestore)
+    private fun matchRef(matchId: String) = firestore.collection("matches").document(matchId)
+    private suspend fun summaryRef(matchId: String) =
+        summaries.document(matchRef(matchId).get().await().getString("summaryId") ?: matchId)
 
     private val PROMPT = """
         Eres un redactor deportivo. Escribe en español el resumen de un partido de fútbol formativo
@@ -52,13 +56,8 @@ object SummaryRepository {
         - Responde SOLO con JSON válido: {"hechos": "...", "analisis": "...", "jugadores_mencionados": ["..."]}
     """.trimIndent()
 
-    fun observeSummary(matchId: String): Flow<MatchSummaryModel?> = callbackFlow {
-        val reg = summaries.document(matchId).addSnapshotListener { snap, error ->
-            if (error != null) { close(error); return@addSnapshotListener }
-            trySend(snap?.toObject(MatchSummaryModel::class.java))
-        }
-        awaitClose { reg.remove() }
-    }
+    fun observeSummary(matchId: String): Flow<MatchSummaryModel?> =
+        matchRef(matchId).observeLinkedDocument("summaryId", summaries, matchId, MatchSummaryModel::class.java)
 
     /** US-27: resúmenes publicados de los partidos del usuario. */
     fun observePublishedForUser(uid: String): Flow<List<MatchSummaryModel>> = callbackFlow {
@@ -166,7 +165,7 @@ object SummaryRepository {
             if (!hasEnoughEvents(match, events))
                 throw Exception("No hay eventos suficientes para generar un resumen completo")
 
-            val previous = summaries.document(match.id).get().await().toObject(MatchSummaryModel::class.java)
+            val previous = summaryRef(match.id).get().await().toObject(MatchSummaryModel::class.java)
             val generation = (previous?.generation ?: 0) + 1
             if (previous != null && previous.status == SummaryStatus.PUBLISHED)
                 throw Exception("El resumen ya fue publicado")
@@ -211,8 +210,37 @@ object SummaryRepository {
                 generation = generation, model = GeminiClient.model, promptVersion = PROMPT_VERSION,
                 memberUids = match.memberUids, createdBy = dt.uid
             )
-            summaries.document(match.id).set(summary).await()
-            Result.success(summary)
+            val ref = ids.transact { tx ->
+                val owner = matchRef(match.id)
+                val currentMatch = tx.get(owner)
+                check(currentMatch.exists() && currentMatch.getString("dtUid") == dt.uid) {
+                    "El partido ya no está disponible para este director técnico"
+                }
+                val existingRef = summaries.document(currentMatch.getString("summaryId") ?: match.id)
+                val snapshot = tx.get(existingRef)
+                val existing = snapshot.toObject(MatchSummaryModel::class.java)
+                check(existing?.generation == previous?.generation && existing?.status != SummaryStatus.PUBLISHED) {
+                    "El resumen cambió durante la generación. Vuelve a cargarlo."
+                }
+                if (existing == null) {
+                    val (allocation, id) = ids.allocate(tx, summaries, SportProEntity.SUMMARY)
+                    val audit = ids.prepareAudit(tx, dt.uid, allocation.reference, "CREATE", emptyList())
+                    allocation.commit(tx, summary.firestoreFields() + ids.creationMetadata(dt.uid))
+                    tx.update(owner, "summaryId", id)
+                    audit()
+                    allocation.reference
+                } else {
+                    val fields = summary.firestoreFields() - "createdBy"
+                    val change = ids.changedFields(snapshot, fields)
+                    val audit = ids.prepareAudit(tx, dt.uid, existingRef, "UPDATE", change.keys.sorted())
+                    tx.update(existingRef, change + mapOf(
+                        "updatedAt" to FieldValue.serverTimestamp(), "updatedByUid" to dt.uid
+                    ))
+                    audit()
+                    existingRef
+                }
+            }
+            Result.success(summary.copy(id = ref.id))
         } catch (e: retrofit2.HttpException) {
             val msg = when (e.code()) {
                 401, 403 -> "Clave de IA inválida. Revisa GEMINI_API_KEY"
@@ -230,7 +258,7 @@ object SummaryRepository {
 
     /** US-26: el DT guarda su edición sin publicar. El texto original de la IA no se toca. */
     suspend fun saveEdit(matchId: String, facts: String, analysis: String): Result<Unit> = try {
-        summaries.document(matchId).update(mapOf("finalFacts" to facts, "finalAnalysis" to analysis)).await()
+        ids.update(summaryRef(matchId), mapOf("finalFacts" to facts, "finalAnalysis" to analysis))
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -239,15 +267,16 @@ object SummaryRepository {
     /** US-26: Aprobar y publicar. Registra DT y fecha, y notifica al equipo. */
     suspend fun approve(summary: MatchSummaryModel, facts: String, analysis: String, dt: UserModel): Result<Unit> = try {
         val now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
-        summaries.document(summary.matchId).update(
+        ids.update(summaryRef(summary.matchId),
             mapOf(
                 "finalFacts" to facts, "finalAnalysis" to analysis,
                 "status" to SummaryStatus.PUBLISHED,
-                "approvedBy" to dt.uid, "approvedByName" to dt.fullName, "approvedAt" to now
+                "approvedBy" to dt.uid, "approvedByName" to dt.fullName, "approvedAt" to now,
+                "publishedAt" to FieldValue.serverTimestamp()
             )
-        ).await()
+        )
         summary.memberUids.filter { it != dt.uid }.forEach { uid ->
-            firestore.collection(NOTIFICATIONS).add(
+            firestore.collection(NOTIFICATIONS).notifyBestEffort(
                 hashMapOf(
                     "recipientUid" to uid, "teamId" to summary.teamId,
                     "title" to "Resumen publicado: ${summary.teamName} vs ${summary.rival}",
@@ -264,7 +293,7 @@ object SummaryRepository {
 
     /** US-26: rechazar (se descarta y se puede regenerar) o despublicar. */
     suspend fun setStatus(matchId: String, status: String): Result<Unit> = try {
-        summaries.document(matchId).update("status", status).await()
+        ids.update(summaryRef(matchId), mapOf("status" to status))
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)

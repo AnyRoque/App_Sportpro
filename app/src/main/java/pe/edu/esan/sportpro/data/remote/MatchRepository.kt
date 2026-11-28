@@ -2,12 +2,15 @@ package pe.edu.esan.sportpro.data.remote
 
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.CallUpItemModel
 import pe.edu.esan.sportpro.data.model.CallUpStatus
+import pe.edu.esan.sportpro.data.model.LinkStatus
 import pe.edu.esan.sportpro.data.model.LineupModel
 import pe.edu.esan.sportpro.data.model.MatchModel
 import pe.edu.esan.sportpro.data.model.MatchStatus
@@ -28,6 +31,7 @@ object MatchRepository {
     private const val NOTIFICATIONS = "notifications"
 
     private val firestore = FirebaseFirestore.getInstance()
+    private val ids = SportProIdGenerator(firestore)
     private val matches get() = firestore.collection(MATCHES)
     private val teams get() = firestore.collection(TEAMS)
     private val players get() = firestore.collection(PLAYERS)
@@ -83,9 +87,7 @@ object MatchRepository {
      */
     suspend fun updatePlayerStarterStatus(matchId: String, playerId: String, isStarter: Boolean): Result<Unit> {
         return try {
-            matches.document(matchId).collection("callups").document(playerId)
-                .update("isStarter", isStarter)
-                .await()
+            ids.update(callUpRef(matchId, playerId), mapOf("isStarter" to isStarter))
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -117,37 +119,21 @@ object MatchRepository {
      */
     suspend fun createMatch(match: MatchModel): Result<String> {
         return try {
-            val docRef = matches.document()
-
-            // 1. Obtener los UIDs de los integrantes del equipo local
-            val localMemberUids = fetchTeamMemberUids(match.teamId, match.dtUid).toMutableSet()
-            val allMemberUids = mutableSetOf<String>()
-            allMemberUids.addAll(localMemberUids)
-
-            // 2. Buscar si el equipo rival existe registrado en la plataforma para notificar a su DT e integrantes
-            var rivalDtUid = ""
-            var rivalMemberUids = emptyList<String>()
-            try {
-                val rivalDocs = teams.whereEqualTo("name", match.rival)
-                    .whereEqualTo("status", TeamStatus.APPROVED)
-                    .get()
-                    .await()
-                val rivalTeam = rivalDocs.toObjects(TeamModel::class.java).firstOrNull()
-                if (rivalTeam != null) {
-                    rivalDtUid = rivalTeam.dtUid
-                    rivalMemberUids = fetchTeamMemberUids(rivalTeam.id, rivalTeam.dtUid)
-                    allMemberUids.addAll(rivalMemberUids)
-                }
-            } catch (_: Exception) {}
+            val localMemberUids = fetchTeamMemberUids(match.teamId, match.dtUid)
+            val rivalTeam = findRivalTeam(match)
+            val rivalMemberUids = rivalTeam?.let { fetchTeamMemberUids(it.id, it.dtUid) }.orEmpty()
 
             val toSave = match.copy(
-                id = docRef.id,
+                rivalTeamId = rivalTeam?.id.orEmpty(),
                 operatorUid = match.operatorUid.ifBlank { match.dtUid },
-                memberUids = allMemberUids.toList(),
+                memberUids = (localMemberUids + rivalMemberUids).distinct(),
                 status = MatchStatus.PROGRAMMED,
                 cancelReason = ""
             )
-            docRef.set(toSave).await()
+            val docRef = ids.create(matches, SportProEntity.MATCH, toSave.firestoreFields()) { tx, _ ->
+                requireTeam(tx, teams, match.teamId, match.dtUid)
+                ({})
+            }
 
             // 3. Notificar a los miembros del equipo local
             dispatchMatchNotifications(
@@ -170,19 +156,58 @@ object MatchRepository {
             }
 
             Result.success(docRef.id)
-        } catch (e: Exception) {
-            Result.failure(e)
+        } catch (error: FirebaseFirestoreException) {
+            if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                Result.failure(IllegalStateException(
+                    "Firestore rechazó guardar el partido. Revisa el acceso del DT y las reglas publicadas de partidos y auditoría.",
+                    error
+                ))
+            } else {
+                Result.failure(error)
+            }
+        } catch (error: Exception) {
+            Result.failure(error)
         }
     }
+
+    private suspend fun findRivalTeam(match: MatchModel): TeamModel? =
+        teams.whereEqualTo("name", match.rival.trim())
+            .whereEqualTo("status", TeamStatus.APPROVED)
+            .get().await().toObjects(TeamModel::class.java)
+            .filter { it.id != match.teamId }
+            .singleOrNull()
 
     /**
      * Actualiza la información de un partido existente.
      */
     suspend fun updateMatch(match: MatchModel): Result<Unit> {
         return try {
-            val memberUids = fetchTeamMemberUids(match.teamId, match.dtUid)
-            val toUpdate = match.copy(memberUids = memberUids)
-            matches.document(match.id).set(toUpdate).await()
+            val target = matches.document(match.id)
+            val previous = target.get().await().toObject(MatchModel::class.java)
+                ?: error("Partido no encontrado")
+            check(previous.status == MatchStatus.PROGRAMMED) { "Solo puedes editar un partido programado" }
+            val changedTeams = previous.teamId != match.teamId || previous.rival != match.rival
+            check(!changedTeams || (!previous.hasCallUp && !previous.hasLineup)) {
+                "El partido ya tiene convocatoria o alineación para los equipos seleccionados"
+            }
+
+            val rivalTeam = if (changedTeams || previous.rivalTeamId.isBlank()) findRivalTeam(match) else null
+            val fields = match.copy(
+                rivalTeamId = if (changedTeams) rivalTeam?.id.orEmpty()
+                    else previous.rivalTeamId.ifBlank { rivalTeam?.id.orEmpty() }
+            ).firestoreFields().filterKeys {
+                it in setOf("teamId", "teamName", "category", "rival", "rivalTeamId", "matchType",
+                    "condition", "modality", "periodMinutes", "date", "time", "matchDate",
+                    "location", "notes", "operatorUid", "operatorName")
+            }
+            val members = if (changedTeams) {
+                val local = fetchTeamMemberUids(match.teamId, match.dtUid)
+                val rival = rivalTeam?.let { fetchTeamMemberUids(it.id, it.dtUid) }.orEmpty()
+                mapOf("memberUids" to (local + rival).distinct())
+            } else {
+                emptyMap()
+            }
+            ids.update(target, fields + members)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -238,16 +263,40 @@ object MatchRepository {
      * Observa en tiempo real los partidos asignados al usuario (DT local, DT rival, Jugador o Padre) (US-16).
      */
     fun observeMatchesForUser(user: UserModel): Flow<List<MatchModel>> = callbackFlow {
-        val registration = matches.whereArrayContains("memberUids", user.uid)
-            .addSnapshotListener { snapshot, error ->
+        val registrations = mutableListOf<com.google.firebase.firestore.ListenerRegistration>()
+        val matchesBySource = mutableMapOf<String, List<MatchModel>>()
+        val observedQueryKeys = mutableSetOf<String>()
+
+        fun publishMatches() {
+            val combined = synchronized(matchesBySource) {
+                matchesBySource.values.flatten().distinctBy { it.id }
+            }
+            trySend(combined)
+        }
+
+        fun observeQuery(key: String, query: Query, closeOnError: Boolean = false) {
+            if (!observedQueryKeys.add(key)) return
+            val registration = query.addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    close(error)
+                    if (closeOnError) close(error)
                     return@addSnapshotListener
                 }
-                val list = snapshot?.toObjects(MatchModel::class.java).orEmpty()
-                trySend(list)
+                synchronized(matchesBySource) {
+                    matchesBySource[key] = snapshot?.toObjects(MatchModel::class.java).orEmpty()
+                }
+                publishMatches()
             }
-        awaitClose { registration.remove() }
+            registrations.add(registration)
+        }
+
+        // Mantiene el acceso por UID para DTs, operadores y partidos con convocatorias existentes.
+        observeQuery("member:${user.uid}", matches.whereArrayContains("memberUids", user.uid), closeOnError = true)
+
+        if (user.roleEnum == Role.DT) {
+            observeQuery("coach:${user.uid}", matches.whereEqualTo("dtUid", user.uid))
+        }
+
+        awaitClose { registrations.forEach { it.remove() } }
     }
 
     private suspend fun fetchTeamMemberUids(teamId: String, dtUid: String): List<String> {
@@ -255,6 +304,7 @@ object MatchRepository {
         try {
             val docs = players.whereEqualTo("teamId", teamId).get().await()
             val list = docs.toObjects(PlayerModel::class.java)
+                .filter { it.active && it.linkStatus == LinkStatus.ACCEPTED }
             list.forEach { p ->
                 if (p.userUid.isNotBlank()) set.add(p.userUid)
                 if (p.parentUid.isNotBlank()) set.add(p.parentUid)
@@ -263,118 +313,129 @@ object MatchRepository {
         return set.toList()
     }
 
-    /**
-     * Crea la convocatoria para un partido (US-17).
-     */
+    private suspend fun validateCallUpOwnership(
+        callUpsRef: com.google.firebase.firestore.CollectionReference,
+        playersToAdd: List<PlayerModel>,
+        fallbackTeamId: String
+    ) {
+        val existing = callUpsRef.get().await().toObjects(CallUpItemModel::class.java)
+        val claimedPlayers = mutableMapOf<String, String>()
+        existing.sortedBy { it.createdAt?.seconds ?: Long.MAX_VALUE }.forEach { item ->
+            val identity = item.userUid.ifBlank { "player:${item.playerId}" }
+            claimedPlayers.putIfAbsent(identity, item.teamId.ifBlank { fallbackTeamId })
+        }
+        val identitiesInRequest = mutableSetOf<String>()
+        playersToAdd.forEach { player ->
+            val identity = player.userUid.ifBlank { "player:${player.id}" }
+            val existingTeamId = claimedPlayers[identity]
+            val newTeamId = player.teamId.ifBlank { fallbackTeamId }
+            if (existingTeamId != null) {
+                throw Exception("${player.fullName} ya fue convocado por otro equipo. Se mantiene la primera convocatoria.")
+            }
+            if (!identitiesInRequest.add(identity)) {
+                throw Exception("${player.fullName} está repetido en la convocatoria.")
+            }
+            claimedPlayers[identity] = newTeamId
+        }
+    }
+
     suspend fun createCallUp(
         match: MatchModel,
         selectedPlayers: List<PlayerModel>,
         deadlineDate: String,
         deadlineTime: String
-    ): Result<Unit> {
-        return try {
-            val batch = firestore.batch()
-            val callUpsRef = matches.document(match.id).collection("callups")
-            val recipients = mutableListOf<String>()
+    ): Result<Unit> = saveCallUps(match, selectedPlayers, deadlineDate, deadlineTime, updateDeadline = true)
 
-            selectedPlayers.forEach { player ->
-                val docRef = callUpsRef.document(player.id)
-                val isMinor = player.parentUid.isNotBlank()
+    suspend fun addPlayersToCallUp(
+        match: MatchModel,
+        additionalPlayers: List<PlayerModel>
+    ): Result<Unit> = saveCallUps(match, additionalPlayers, match.callUpDeadlineDate,
+        match.callUpDeadlineTime, updateDeadline = false)
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun saveCallUps(
+        match: MatchModel,
+        selected: List<PlayerModel>,
+        deadlineDate: String,
+        deadlineTime: String,
+        updateDeadline: Boolean
+    ): Result<Unit> = try {
+        val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
+        val matchRef = matches.document(match.id)
+        val collection = matchRef.collection("callups")
+        validateCallUpOwnership(collection, selected, match.teamId)
+        val recipients = ids.transact { tx ->
+            val current = tx.get(matchRef)
+            check(current.exists()) { "No se encontró el partido" }
+            val existing = current.get("callupIds") as? Map<String, String> ?: emptyMap()
+            val identities = current.get("callupUserIds") as? Map<String, String> ?: emptyMap()
+            val roster = selected.map { input ->
+                val player = tx.get(players.document(input.id)).toObject(PlayerModel::class.java)
+                    ?: error("Un jugador ya no está disponible")
+                check(player.teamId == input.teamId && player.teamId.isNotBlank()) {
+                    "El jugador cambió de equipo. Recarga el plantel."
+                }
+                check(player.id !in existing && (player.userUid.isBlank() || player.userUid !in identities)) {
+                    "El jugador ya fue convocado"
+                }
+                player
+            }
+            val (references, reserve) = ids.allocateCallUps(tx, collection, roster.size)
+            val audit = ids.prepareAudit(tx, uid, matchRef, "UPDATE", listOf("callupIds"))
+            val newKeys = roster.zip(references).associate { (player, ref) -> player.id to ref.id }
+            val newAccounts = roster.filter { it.userUid.isNotBlank() }.associate { it.userUid to it.id }
+            check(newAccounts.size == roster.count { it.userUid.isNotBlank() }) { "Hay una cuenta repetida en la convocatoria" }
+            val recipients = roster.flatMap { listOf(it.userUid, it.parentUid) }.filter { it.isNotBlank() }.distinct()
+            val updates = mutableMapOf<String, Any>(
+                "hasCallUp" to true,
+                "callupIds" to (existing + newKeys),
+                "callupUserIds" to (identities + newAccounts),
+                "memberUids" to FieldValue.arrayUnion(*recipients.toTypedArray()),
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "updatedByUid" to uid
+            )
+            if (updateDeadline) {
+                updates["callUpDeadlineDate"] = deadlineDate
+                updates["callUpDeadlineTime"] = deadlineTime
+            }
+            reserve()
+            roster.zip(references).forEach { (player, ref) ->
                 val item = CallUpItemModel(
-                    id = player.id,
                     matchId = match.id,
+                    teamId = player.teamId,
                     playerId = player.id,
                     playerName = player.fullName,
                     playerPhotoUrl = player.photoUrl,
                     position = player.position,
-                    isMinor = isMinor,
+                    isMinor = player.parentUid.isNotBlank(),
                     userUid = player.userUid,
                     parentUid = player.parentUid,
                     responseStatus = CallUpStatus.PENDING,
                     deadlineDate = deadlineDate,
                     deadlineTime = deadlineTime
                 )
-                batch.set(docRef, item)
-
-                if (player.userUid.isNotBlank()) recipients.add(player.userUid)
-                if (player.parentUid.isNotBlank()) recipients.add(player.parentUid)
+                tx.set(ref, item.firestoreFields() + ids.creationMetadata(uid) + ("id" to ref.id))
             }
-
-            val matchRef = matches.document(match.id)
-            batch.update(
-                matchRef,
-                mapOf(
-                    "hasCallUp" to true,
-                    "callUpDeadlineDate" to deadlineDate,
-                    "callUpDeadlineTime" to deadlineTime
-                )
-            )
-
-            batch.commit().await()
-
-            dispatchMatchNotifications(
-                teamId = match.teamId,
-                recipientUids = recipients.distinct(),
-                title = "Nueva Convocatoria",
-                message = "Has sido convocado para el partido vs ${match.rival}. Confirma tu asistencia antes del $deadlineDate $deadlineTime hs.",
-                matchId = match.id
-            )
-
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+            tx.update(matchRef, updates)
+            audit()
+            recipients
         }
+        dispatchMatchNotifications(
+            teamId = match.teamId,
+            recipientUids = recipients,
+            title = "Nueva Convocatoria",
+            message = "Has sido convocado para el partido vs ${match.rival}. Confirma tu asistencia antes del $deadlineDate $deadlineTime hs.",
+            matchId = match.id
+        )
+        Result.success(Unit)
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    /**
-     * Agrega jugadores adicionales a una convocatoria existente (US-17).
-     */
-    suspend fun addPlayersToCallUp(
-        match: MatchModel,
-        additionalPlayers: List<PlayerModel>
-    ): Result<Unit> {
-        return try {
-            val batch = firestore.batch()
-            val callUpsRef = matches.document(match.id).collection("callups")
-            val recipients = mutableListOf<String>()
-
-            additionalPlayers.forEach { player ->
-                val docRef = callUpsRef.document(player.id)
-                val isMinor = player.parentUid.isNotBlank()
-                val item = CallUpItemModel(
-                    id = player.id,
-                    matchId = match.id,
-                    playerId = player.id,
-                    playerName = player.fullName,
-                    playerPhotoUrl = player.photoUrl,
-                    position = player.position,
-                    isMinor = isMinor,
-                    userUid = player.userUid,
-                    parentUid = player.parentUid,
-                    responseStatus = CallUpStatus.PENDING,
-                    deadlineDate = match.callUpDeadlineDate,
-                    deadlineTime = match.callUpDeadlineTime
-                )
-                batch.set(docRef, item)
-
-                if (player.userUid.isNotBlank()) recipients.add(player.userUid)
-                if (player.parentUid.isNotBlank()) recipients.add(player.parentUid)
-            }
-
-            batch.commit().await()
-
-            dispatchMatchNotifications(
-                teamId = match.teamId,
-                recipientUids = recipients.distinct(),
-                title = "Nueva Convocatoria",
-                message = "Has sido convocado para el partido vs ${match.rival}. Confirma tu asistencia antes del ${match.callUpDeadlineDate} ${match.callUpDeadlineTime} hs.",
-                matchId = match.id
-            )
-
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+    private suspend fun callUpRef(matchId: String, playerId: String): com.google.firebase.firestore.DocumentReference {
+        val match = matches.document(matchId)
+        val key = match.get().await().getString("callupIds.$playerId") ?: playerId
+        return match.collection("callups").document(key)
     }
 
     /**
@@ -388,15 +449,12 @@ object MatchRepository {
         comment: String = ""
     ): Result<Unit> {
         return try {
-            val ref = matches.document(matchId).collection("callups").document(playerId)
-            ref.update(
-                mapOf(
-                    "responseStatus" to status,
-                    "rejectReason" to reason.trim(),
-                    "rejectComment" to comment.trim(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            val ref = callUpRef(matchId, playerId)
+            ids.update(ref, mapOf(
+                "responseStatus" to status,
+                "rejectReason" to reason.trim(),
+                "rejectComment" to comment.trim()
+            ))
 
             // Notificar al DT del partido
             try {
@@ -422,7 +480,8 @@ object MatchRepository {
                         recipientUids = listOf(m.dtUid),
                         title = title,
                         message = msg,
-                        matchId = matchId
+                        matchId = matchId,
+                        callUpId = ref.id
                     )
                 }
             } catch (_: Exception) {}
@@ -436,7 +495,7 @@ object MatchRepository {
     /**
      * Reenvía un recordatorio a los pendientes (US-17).
      */
-    fun resendCallUpReminders(
+    suspend fun resendCallUpReminders(
         match: MatchModel,
         pendingItems: List<CallUpItemModel>
     ): Result<Unit> {
@@ -480,42 +539,60 @@ object MatchRepository {
     /**
      * Guarda la alineación de un partido (US-18).
      */
-    suspend fun saveLineup(matchId: String, lineup: LineupModel): Result<Unit> {
-        return try {
-            val batch = firestore.batch()
-            val lineupRef = matches.document(matchId).collection("lineup").document("starting")
-            batch.set(lineupRef, lineup)
-
-            val matchRef = matches.document(matchId)
-            batch.update(
-                matchRef,
-                mapOf(
-                    "hasLineup" to true,
-                    "formation" to lineup.formation
-                )
-            )
-
-            batch.commit().await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun saveLineup(matchId: String, lineup: LineupModel): Result<Unit> = try {
+        val uid = FirebaseAuthManager.currentUid ?: error("Debes iniciar sesión")
+        val matchRef = matches.document(matchId)
+        val teamId = lineup.teamId.ifBlank { "starting" }
+        val collection = matchRef.collection("lineup")
+        ids.transact { tx ->
+            val match = tx.get(matchRef)
+            check(match.exists()) { "El partido ya no está disponible" }
+            val existing = collection.document(match.getString("lineupIds.$teamId") ?: teamId)
+            val previous = tx.get(existing)
+            val playerIds = lineup.positions.mapNotNull { it.playerId } + lineup.substitutePlayerIds
+            check(playerIds.distinct().size == playerIds.size) { "La alineación contiene jugadores repetidos" }
+            val actualTeam = lineup.teamId.ifBlank { match.getString("teamId").orEmpty() }
+            playerIds.forEach { playerId ->
+                val player = tx.get(players.document(playerId))
+                check(player.exists() && player.getString("teamId") == actualTeam) {
+                    "Hay un jugador que no pertenece al equipo"
+                }
+            }
+            val data = lineup.copy(matchId = matchId).firestoreFields() +
+                ("savedAt" to FieldValue.serverTimestamp())
+            if (previous.exists()) {
+                val audit = ids.prepareAudit(tx, uid, existing, "UPDATE",
+                    ids.changedFields(previous, data).keys.sorted())
+                tx.update(existing, data + mapOf(
+                    "updatedAt" to FieldValue.serverTimestamp(), "updatedByUid" to uid
+                ))
+                tx.update(matchRef, "hasLineup", true)
+                audit()
+            } else {
+                val (allocation, id) = ids.allocate(tx, collection, SportProEntity.LINEUP)
+                val audit = ids.prepareAudit(tx, uid, allocation.reference, "CREATE", emptyList())
+                allocation.commit(tx, data + ids.creationMetadata(uid))
+                tx.update(matchRef, mapOf("lineupIds.$teamId" to id, "lastLineupTeam" to teamId, "hasLineup" to true))
+                audit()
+            }
         }
+        Result.success(Unit)
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    /**
-     * Observa la alineación inicial en tiempo real (US-18).
-     */
-    fun observeLineup(matchId: String): Flow<LineupModel?> = callbackFlow {
-        val registration = matches.document(matchId).collection("lineup").document("starting")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    close(error)
-                    return@addSnapshotListener
-                }
-                val model = snapshot?.toObject(LineupModel::class.java)
-                trySend(model)
-            }
-        awaitClose { registration.remove() }
+    suspend fun getLineup(matchId: String, teamId: String): Result<LineupModel?> = try {
+        val ref = matches.document(matchId)
+        val id = ref.get().await().getString("lineupIds.$teamId") ?: teamId
+        val snapshot = ref.collection("lineup").document(id).get().await()
+        Result.success(snapshot.toObject(LineupModel::class.java))
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    fun observeLineup(matchId: String, teamId: String = "starting"): Flow<LineupModel?> {
+        val ref = matches.document(matchId)
+        return ref.observeLinkedDocument("lineupIds.$teamId", ref.collection("lineup"), teamId, LineupModel::class.java)
     }
 
     /**
@@ -572,9 +649,22 @@ object MatchRepository {
      */
     suspend fun addMatchEvent(event: pe.edu.esan.sportpro.data.model.MatchEventModel): Result<Unit> {
         return try {
-            val docRef = matches.document(event.matchId).collection("events").document()
-            val toSave = event.copy(id = docRef.id)
-            docRef.set(toSave).await()
+            val entity = when (event.type) {
+                "GOL" -> SportProEntity.GOAL
+                "TARJETA_AMARILLA", "TARJETA_ROJA" -> SportProEntity.CARD
+                "CAMBIO" -> SportProEntity.SUBSTITUTION
+                else -> SportProEntity.EVENT
+            }
+            val matchRef = matches.document(event.matchId)
+            ids.create(matchRef.collection("events"), entity, event.firestoreFields() +
+                ("registeredAt" to FieldValue.serverTimestamp())) { tx, _ ->
+                check(tx.get(matchRef).exists()) { "El partido no existe" }
+                listOfNotNull(event.playerId, event.jugadorSaleId, event.jugadorEntraId)
+                    .filter { it.isNotBlank() }.distinct().forEach { playerId ->
+                        check(tx.get(players.document(playerId)).exists()) { "El jugador no existe" }
+                    }
+                ({})
+            }
 
             // Recalcular marcador si el evento es un GOL activo
             recalculateMatchScore(event.matchId)
@@ -858,34 +948,8 @@ object MatchRepository {
             if (motivo.isBlank()) throw Exception("El motivo de la modificación es obligatorio.")
 
             val eventRef = matches.document(event.matchId).collection("events").document(event.id)
-            val currentDoc = eventRef.get().await()
-            val oldEvent = currentDoc.toObject(pe.edu.esan.sportpro.data.model.MatchEventModel::class.java)
-
-            val originalSummary = "Min: ${oldEvent?.minute}', Tipo: ${oldEvent?.type}, Jugador: ${oldEvent?.playerName}, Obs: ${oldEvent?.observation}"
-            val newSummary = "Min: ${event.minute}', Tipo: ${event.type}, Jugador: ${event.playerName}, Obs: ${event.observation}"
-
-            val batch = firestore.batch()
-
-            // 1. Actualizar evento
-            val updatedEvent = event.copy(minutoCorregido = true)
-            batch.set(eventRef, updatedEvent)
-
-            // 2. Registrar bitácora de auditoría (append-only)
-            val auditRef = eventRef.collection("history").document()
-            val auditData = pe.edu.esan.sportpro.data.model.EventAuditModel(
-                id = auditRef.id,
-                eventId = event.id,
-                matchId = event.matchId,
-                tipoCambio = pe.edu.esan.sportpro.data.model.AuditChangeType.EDIT,
-                usuarioUid = user.uid,
-                usuarioNombre = user.fullName,
-                motivo = motivo.trim(),
-                valorOriginal = originalSummary,
-                valorNuevo = newSummary
-            )
-            batch.set(auditRef, auditData)
-
-            batch.commit().await()
+            saveEventChange(eventRef, event.matchId, user, motivo, canceled = false,
+                event.copy(minutoCorregido = true).firestoreFields() - setOf("registeredAt", "registeredBy", "matchId", "status"))
 
             // Recalcular marcador y estadísticas
             recalculateMatchScore(event.matchId)
@@ -909,32 +973,8 @@ object MatchRepository {
             if (motivo.isBlank()) throw Exception("El motivo de la anulación es obligatorio.")
 
             val eventRef = matches.document(matchId).collection("events").document(eventId)
-            val currentDoc = eventRef.get().await()
-            val oldEvent = currentDoc.toObject(pe.edu.esan.sportpro.data.model.MatchEventModel::class.java)
-
-            val originalSummary = "Min: ${oldEvent?.minute}', Tipo: ${oldEvent?.type}, Jugador: ${oldEvent?.playerName}, Obs: ${oldEvent?.observation}"
-
-            val batch = firestore.batch()
-
-            // 1. Marcar evento como ANULADO
-            batch.update(eventRef, "status", pe.edu.esan.sportpro.data.model.EventStatus.CANCELED)
-
-            // 2. Registrar bitácora de auditoría (append-only)
-            val auditRef = eventRef.collection("history").document()
-            val auditData = pe.edu.esan.sportpro.data.model.EventAuditModel(
-                id = auditRef.id,
-                eventId = eventId,
-                matchId = matchId,
-                tipoCambio = pe.edu.esan.sportpro.data.model.AuditChangeType.CANCELLATION,
-                usuarioUid = user.uid,
-                usuarioNombre = user.fullName,
-                motivo = motivo.trim(),
-                valorOriginal = originalSummary,
-                valorNuevo = "Estado: ANULADO"
-            )
-            batch.set(auditRef, auditData)
-
-            batch.commit().await()
+            saveEventChange(eventRef, matchId, user, motivo, canceled = true,
+                mapOf("status" to pe.edu.esan.sportpro.data.model.EventStatus.CANCELED))
 
             // Recalcular marcador y estadísticas
             recalculateMatchScore(matchId)
@@ -942,6 +982,44 @@ object MatchRepository {
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private suspend fun saveEventChange(
+        ref: com.google.firebase.firestore.DocumentReference,
+        matchId: String,
+        user: UserModel,
+        reason: String,
+        canceled: Boolean,
+        updates: Map<String, Any?>
+    ) {
+        ids.transact { tx ->
+            val snapshot = tx.get(ref)
+            val old = snapshot.toObject(pe.edu.esan.sportpro.data.model.MatchEventModel::class.java)
+                ?: error("El evento no existe")
+            val fields = ids.changedFields(snapshot, updates)
+            val (history, _) = ids.allocate(tx, ref.collection("history"), SportProEntity.EVENT_HISTORY)
+            val audit = ids.prepareAudit(tx, user.uid, ref,
+                if (canceled) "DEACTIVATE" else "UPDATE", fields.keys.sorted())
+            val previous = "Min: ${old.minute}', Tipo: ${old.type}, Jugador: ${old.playerName}, Obs: ${old.observation}"
+            val next = if (canceled) "Estado: ANULADO" else
+                "Min: ${updates["minute"]}', Tipo: ${updates["type"]}, Jugador: ${updates["playerName"]}, Obs: ${updates["observation"]}"
+            tx.update(ref, fields + mapOf(
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "updatedByUid" to user.uid
+            ))
+            history.commit(tx, mapOf(
+                "eventId" to ref.id,
+                "matchId" to matchId,
+                "tipoCambio" to if (canceled) "ANULACION" else "EDICION",
+                "usuarioUid" to user.uid,
+                "usuarioNombre" to user.fullName,
+                "motivo" to reason.trim(),
+                "valorOriginal" to previous,
+                "valorNuevo" to next,
+                "fechaHora" to FieldValue.serverTimestamp()
+            ) + ids.creationMetadata(user.uid))
+            audit()
         }
     }
 
@@ -997,9 +1075,7 @@ object MatchRepository {
         return try {
             if (request.justification.isBlank()) throw Exception("Debes ingresar el motivo de la justificación para la solicitud.")
 
-            val docRef = cancellationRequestsRef.document()
-            val toSave = request.copy(id = docRef.id)
-            docRef.set(toSave).await()
+            ids.create(cancellationRequestsRef, SportProEntity.EVENT_CANCELLATION, request.firestoreFields() - "resolvedAt")
 
             // Notificar a administradores
             val adminDocs = firestore.collection("users").whereEqualTo("role", "ADM").get().await()
@@ -1097,12 +1173,13 @@ object MatchRepository {
         }
     }
 
-    private fun dispatchMatchNotifications(
+    private suspend fun dispatchMatchNotifications(
         teamId: String,
         recipientUids: List<String>,
         title: String,
         message: String,
-        matchId: String
+        matchId: String,
+        callUpId: String? = null
     ) {
         try {
             recipientUids.forEach { uid ->
@@ -1116,7 +1193,8 @@ object MatchRepository {
                     "read" to false,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
-                notifications.add(notif)
+                if (callUpId != null) notif["callUpId"] = callUpId
+                notifications.notifyBestEffort(notif)
             }
         } catch (_: Exception) {}
     }

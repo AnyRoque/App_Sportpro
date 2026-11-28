@@ -12,7 +12,9 @@ data class UserModel(
     val role: String = "",
     val birthDate: String = "",
     val acceptedTerms: Boolean = false,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val id: String = "",
+    val authUid: String = ""
 ) {
     @get:Exclude
     val fullName: String get() = "$name $lastName".trim()

@@ -2,6 +2,7 @@ package pe.edu.esan.sportpro.data.model
 
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.Exclude
 import com.google.firebase.firestore.ServerTimestamp
 import pe.edu.esan.sportpro.util.Validators
@@ -42,13 +43,16 @@ object TacticalFormations {
  * Documento matches/{matchId}/callups/{playerId} (US-17: Convocatoria y Disponibilidad).
  */
 data class CallUpItemModel(
-    @DocumentId var id: String = "", // playerId
+    var id: String = "",
     val matchId: String = "",
+    val teamId: String = "",
     val playerId: String = "",
     val playerName: String = "",
     val playerPhotoUrl: String = "",
     val position: String = "",
+    @get:PropertyName("minor") @field:PropertyName("minor")
     val isMinor: Boolean = false,
+    @get:PropertyName("isStarter") @field:PropertyName("isStarter")
     val isStarter: Boolean = false, // Titular (true) vs Suplente (false)
     val userUid: String = "",
     val parentUid: String = "",
@@ -60,6 +64,11 @@ data class CallUpItemModel(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    @get:DocumentId
+    var firestoreDocumentId: String
+        get() = id
+        set(value) { if (id.isBlank()) id = value }
+
     @get:Exclude
     val isExpired: Boolean
         get() {
